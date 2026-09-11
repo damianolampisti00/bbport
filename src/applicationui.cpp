@@ -50,7 +50,7 @@ ApplicationUI::ApplicationUI() :
     m_keyBackupManager = new KeyBackupManager(m_matrixApi, this);
     m_olmCryptoManager = new OlmCryptoManager(m_matrixApi, m_keyBackupManager, this);
     m_matrixApi->setPreferredDeviceId(m_olmCryptoManager->deviceId());
-    m_syncEngine = new SyncEngine(m_matrixApi, m_keyBackupManager, this);
+    m_syncEngine = new SyncEngine(m_matrixApi, m_keyBackupManager, m_olmCryptoManager, this);
     m_timelineStore = new TimelineStore(this);
     m_mediaManager = new MediaManager(m_matrixApi, this);
     m_roomListModel = new RoomListModel(m_matrixApi, m_mediaManager, this);

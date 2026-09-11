@@ -11,6 +11,7 @@
 
 class MatrixApi;
 class KeyBackupManager;
+class OlmCryptoManager;
 class QNetworkReply;
 class QTimer;
 
@@ -30,7 +31,7 @@ class SyncEngine : public QObject
     Q_PROPERTY(bool initialSyncDone READ isInitialSyncDone NOTIFY initialSyncCompleted)
 
 public:
-    explicit SyncEngine(MatrixApi *api, KeyBackupManager *keyBackup, QObject *parent = 0);
+    explicit SyncEngine(MatrixApi *api, KeyBackupManager *keyBackup, OlmCryptoManager *olmCrypto, QObject *parent = 0);
     virtual ~SyncEngine();
 
     bool isRunning() const;
@@ -124,6 +125,7 @@ private:
 
     MatrixApi *m_api;
     KeyBackupManager *m_keyBackup;
+    OlmCryptoManager *m_olmCrypto;
     bool m_running;
     bool m_initialSyncDone;
     QString m_since;

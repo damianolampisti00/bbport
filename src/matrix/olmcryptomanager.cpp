@@ -502,8 +502,9 @@ void OlmCryptoManager::handleToDeviceEvent(const QVariantMap &event)
     if (jda.hasError()) { appendOlmLog(QString("  inner JSON parse failed: %1").arg(plaintext.left(300))); return; }
 
     QVariantMap inner = parsed.toMap();
-    appendOlmLog(QString("  decrypted inner type=%1").arg(inner.value("type").toString()));
-    if (inner.value("type").toString() != "m.room_key") return;
+    QString innerType = inner.value("type").toString();
+    appendOlmLog(QString("  decrypted inner type=%1").arg(innerType));
+    if (innerType != "m.room_key" && innerType != "m.forwarded_room_key") return;
 
     QVariantMap roomKeyContent = inner.value("content").toMap();
     if (roomKeyContent.value("algorithm").toString() != "m.megolm.v1.aes-sha2") {
@@ -519,8 +520,49 @@ void OlmCryptoManager::handleToDeviceEvent(const QVariantMap &event)
         return;
     }
 
-    appendOlmLog(QString("  importLiveSession room=%1 session=%2").arg(roomId).arg(sessionId));
-    m_keyBackup->importLiveSession(roomId, sessionId, sessionKey);
+    // m.room_key (live share, freshly created outbound session) and
+    // m.forwarded_room_key (one of our own other devices answering
+    // requestRoomKey() below) use different session_key wire formats --
+    // KeyBackupManager already has to distinguish these for the live-share
+    // vs. Element-export-file/backup cases, so route each to the matching
+    // import call rather than duplicating that logic here.
+    if (innerType == "m.room_key") {
+        appendOlmLog(QString("  importLiveSession room=%1 session=%2").arg(roomId).arg(sessionId));
+        m_keyBackup->importLiveSession(roomId, sessionId, sessionKey);
+    } else {
+        appendOlmLog(QString("  importForwardedSession room=%1 session=%2").arg(roomId).arg(sessionId));
+        m_keyBackup->importForwardedSession(roomId, sessionId, sessionKey);
+    }
+}
+
+void OlmCryptoManager::requestRoomKey(const QString &roomId, const QString &sessionId, const QString &senderKey)
+{
+    if (roomId.isEmpty() || sessionId.isEmpty()) return;
+
+    QVariantMap body;
+    body["algorithm"] = "m.megolm.v1.aes-sha2";
+    body["room_id"] = roomId;
+    body["sender_key"] = senderKey;
+    body["session_id"] = sessionId;
+
+    QVariantMap content;
+    content["action"] = "request";
+    content["requesting_device_id"] = m_deviceId;
+    // Stable per (room, session) rather than a fresh id each call: re-requesting
+    // the same still-missing session (e.g. a later message in the same
+    // session) is then a harmless no-op resend from the recipient's point of
+    // view, per the spec's request_id semantics, instead of spawning a
+    // distinct request every time.
+    content["request_id"] = QString("bbport-%1-%2").arg(roomId, sessionId);
+    content["body"] = body;
+
+    appendOlmLog(QString("requestRoomKey room=%1 session=%2").arg(roomId).arg(sessionId));
+
+    // Sent to every other device on THIS account (wildcard "*"), not the
+    // original sender -- per the Matrix key-request mechanism, only a
+    // device you already own is expected to honor this and forward the
+    // session back via m.forwarded_room_key.
+    sendToOneDevice("m.room_key_request", m_api->userId(), "*", content);
 }
 
 void *OlmCryptoManager::olmSessionFor(const QString &theirIdentityKey) const
@@ -1347,6 +1389,14 @@ void OlmCryptoManager::sendVerificationCancel(const QString &reason, const QStri
     setVerificationEmoji(QString());
     freeVerificationSas();
     m_verification = VerificationState();
+    // verificationActive's Q_PROPERTY NOTIFY is verificationStatusChanged()
+    // (it has no dedicated signal of its own) -- the setVerificationStatus()
+    // call above already fired that signal, but at that point m_verification
+    // .active was still true, so QML's binding re-read the same "true" value
+    // and never noticed anything changed. It needs firing again now that
+    // active has actually flipped to false, or the overlay/banner gated on
+    // verificationActive never hides itself once a verification ends.
+    emit verificationStatusChanged();
     setVerificationIncoming(false, QString());
 }
 
@@ -1660,6 +1710,12 @@ void OlmCryptoManager::handleVerificationEvent(const QVariantMap &event)
         setVerificationEmoji(QString());
         freeVerificationSas();
         m_verification = VerificationState();
+        // See the same call in sendVerificationCancel(): verificationActive
+        // only ever notifies via verificationStatusChanged(), which the
+        // setVerificationStatus() call above already fired while .active was
+        // still true -- fire it again now that the reset just flipped it to
+        // false, or the verification overlay never notices it should hide.
+        emit verificationStatusChanged();
         setVerificationIncoming(false, QString());
         return;
     }
@@ -1671,6 +1727,7 @@ void OlmCryptoManager::handleVerificationEvent(const QVariantMap &event)
         setVerificationEmoji(QString());
         freeVerificationSas();
         m_verification = VerificationState();
+        emit verificationStatusChanged(); // see sendVerificationCancel()'s comment
         setVerificationIncoming(false, QString());
         return;
     }

@@ -64,6 +64,14 @@ public:
     // placeholders already showing for this session.
     bool importLiveSession(const QString &roomId, const QString &sessionId, const QString &sessionKeyB64);
 
+    // Imports a session received via m.forwarded_room_key -- one of this
+    // account's own other devices answering
+    // OlmCryptoManager::requestRoomKey(). Uses the same "exported session"
+    // wire format (olm_import_inbound_group_session, via
+    // importExportedSession()) as the server-side key-backup path, unlike
+    // importLiveSession()'s own format.
+    bool importForwardedSession(const QString &roomId, const QString &sessionId, const QString &sessionKeyB64);
+
 public slots:
     void unlock(const QString &recoveryKey);
     void requestSession(const QString &roomId, const QString &sessionId);

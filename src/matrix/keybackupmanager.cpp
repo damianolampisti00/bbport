@@ -457,6 +457,13 @@ bool KeyBackupManager::importLiveSession(const QString &roomId, const QString &s
     return true;
 }
 
+bool KeyBackupManager::importForwardedSession(const QString &roomId, const QString &sessionId, const QString &sessionKeyB64)
+{
+    if (!importExportedSession(roomId, sessionId, sessionKeyB64)) return false;
+    emit sessionReady(roomId, sessionId);
+    return true;
+}
+
 bool KeyBackupManager::decrypt(const QString &roomId, const QString &sessionId, const QString &ciphertextBase64, QString *plaintextOut)
 {
     void *mem = m_sessions.value(sessionKey(roomId, sessionId));

@@ -86,6 +86,18 @@ public slots:
     // Processes one raw to-device event from /sync's "to_device.events".
     void handleToDeviceEvent(const QVariantMap &event);
 
+    // Sends m.room_key_request (action: "request") to every one of this
+    // account's OTHER devices (wildcard "*" device id) asking whoever
+    // already has this specific Megolm session to forward it back via
+    // m.forwarded_room_key. Recovers from the case where the device that
+    // originally shared the key either never reached us (a stale/desynced
+    // 1:1 Olm session with the sender silently drops the m.room_key --
+    // olmDecryptFrom() has no way to recover that itself once the sender
+    // insists on reusing that same broken session) or shared it before this
+    // device existed. Called by SyncEngine the first time it sees a
+    // ciphertext for a session it doesn't have.
+    void requestRoomKey(const QString &roomId, const QString &sessionId, const QString &senderKey);
+
     // Encrypts `content` for roomId and sends it as a real m.room.encrypted
     // event, sharing the room's Megolm session key to any devices that don't
     // have it yet first. eventType is the type wrapped INSIDE the Megolm

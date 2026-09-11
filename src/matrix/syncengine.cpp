@@ -1,6 +1,7 @@
 #include "syncengine.hpp"
 #include "matrixapi.hpp"
 #include "keybackupmanager.hpp"
+#include "olmcryptomanager.hpp"
 
 #include <bb/data/JsonDataAccess>
 
@@ -118,10 +119,11 @@ static bool parseReaction(const QString &type, const QVariantMap &content, QStri
     return !targetEventId->isEmpty() && !key->isEmpty();
 }
 
-SyncEngine::SyncEngine(MatrixApi *api, KeyBackupManager *keyBackup, QObject *parent) :
+SyncEngine::SyncEngine(MatrixApi *api, KeyBackupManager *keyBackup, OlmCryptoManager *olmCrypto, QObject *parent) :
         QObject(parent),
         m_api(api),
         m_keyBackup(keyBackup),
+        m_olmCrypto(olmCrypto),
         m_running(false),
         m_initialSyncDone(false),
         m_currentReply(0),
@@ -548,6 +550,7 @@ void SyncEngine::processJoinedRoom(const QString &roomId, const QVariantMap &roo
             QString algorithm = content.value("algorithm").toString();
             QString sessionId = content.value("session_id").toString();
             QString ciphertext = content.value("ciphertext").toString();
+            QString senderKey = content.value("sender_key").toString();
 
             meta["encrypted"] = true;
 
@@ -593,13 +596,32 @@ void SyncEngine::processJoinedRoom(const QString &roomId, const QVariantMap &roo
                 meta["lastTs"] = ts;
 
                 if (m_keyBackup && algorithm == "m.megolm.v1.aes-sha2" && !sessionId.isEmpty()) {
+                    QString pendingKey = roomId + "|" + sessionId;
+                    // Only ask once per session, the first time we hit a
+                    // ciphertext we can't decrypt for it -- otherwise every
+                    // later message in the same still-missing session would
+                    // fire its own m.room_key_request, spamming this
+                    // account's other devices for something already asked.
+                    bool alreadyPending = m_pendingEncrypted.contains(pendingKey);
                     PendingEncryptedEvent pending;
                     pending.eventId = eventId;
                     pending.sender = sender;
                     pending.ts = ts;
                     pending.ciphertext = ciphertext;
-                    m_pendingEncrypted[roomId + "|" + sessionId].append(pending);
+                    m_pendingEncrypted[pendingKey].append(pending);
                     m_keyBackup->requestSession(roomId, sessionId);
+                    // Recovers the case where the m.room_key that should
+                    // have shared this session either never reached us (a
+                    // stale/desynced 1:1 Olm session with the sender
+                    // silently drops it -- see olmDecryptFrom()) or was sent
+                    // before this device existed: asks any of this
+                    // account's OWN other devices that already has the
+                    // session to forward it via m.forwarded_room_key,
+                    // independently of the server-side key-backup fetch
+                    // requestSession() above already does.
+                    if (!alreadyPending && m_olmCrypto) {
+                        m_olmCrypto->requestRoomKey(roomId, sessionId, senderKey);
+                    }
                 }
             }
             continue;
