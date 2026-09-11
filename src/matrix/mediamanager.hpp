@@ -58,7 +58,7 @@ public:
     // instagramUrl is an Instagram post/Reel page link (see
     // SyncEngine/MessageListModel's extractMediaFields(), which flags these
     // via content.external_url) -- the Beeper Instagram bridge never gives
-    // Beport an actual playable video, just a thumbnail and this link.
+    // BBport an actual playable video, just a thumbnail and this link.
     // Fetching shells out (via QProcess) to BerryCore's on-device youtube-dl
     // binary, which extracts and downloads the real video (fragile: breaks
     // if Instagram changes their page markup, or if the linked post isn't
@@ -81,18 +81,18 @@ public:
     // Trial alternative to the in-app videoViewerPage (NativeVideoPlayer +
     // mm-renderer): hands localFileUrl to BB10's Invocation Framework with
     // no target specified, so the system picks the default video card (the
-    // native Videos app) to play it instead of rendering inside Beport.
+    // native Videos app) to play it instead of rendering inside BBport.
     // Kept alongside the in-app player rather than replacing it, so main.qml
     // can be pointed back at navigationPane.openVideo() with a one-line
     // revert if this doesn't work out.
     Q_INVOKABLE void openVideoExternally(const QString &localFileUrl);
 
     // Appends a timestamped line to
-    // /accounts/1000/shared/misc/beport_debug.log. Exists because there's
+    // /accounts/1000/shared/misc/bbport_debug.log. Exists because there's
     // no way to see qDebug()/console.log() output from a real device
     // without a signed debug token to attach a debugger -- shared/misc
     // (not this app's own private sandbox) so it's a plain `cat
-    // beport_debug.log` away from Term49/any on-device shell, no PC round-
+    // bbport_debug.log` away from Term49/any on-device shell, no PC round-
     // trip needed.
     Q_INVOKABLE void debugLog(const QString &line);
 

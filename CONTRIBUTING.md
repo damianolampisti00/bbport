@@ -1,4 +1,4 @@
-# Contributing to Beport
+# Contributing to BBport
 
 Thanks for taking an interest in a BlackBerry 10 Matrix client in 2026. This document covers how to get a working development setup, how this codebase is organized, and the conventions/gotchas that will save you time.
 
@@ -17,7 +17,7 @@ export QNX_HOST=/path/to/bbndk/host_10_3_1_12/<platform>/x86
 export QNX_TARGET=/path/to/bbndk/target_10_3_1_995/qnx6
 export PATH="$QNX_HOST/usr/bin:$PATH"   # needed so make can find sh.exe/qcc/moc on Windows hosts
 
-cd Beport
+cd BBport
 make -I "$QNX_TARGET/usr/include" Device-Debug
 ```
 
@@ -71,7 +71,7 @@ These cost real debugging time to discover; please don't rediscover them the har
 
 BlackBerry's debug-token servers are no longer available, so attaching Momentics' live debugger to a real device isn't an option for this project. The established workflow instead:
 
-1. Write diagnostics straight to a file the device shell can read, e.g. `/accounts/1000/shared/misc/beport_debug.log` (shared storage — readable from any app/shell, unlike `QDir::homePath()` which is this app's own private sandbox and needs a PC round-trip via `blackberry-deploy -getFile` to retrieve).
+1. Write diagnostics straight to a file the device shell can read, e.g. `/accounts/1000/shared/misc/bbport_debug.log` (shared storage — readable from any app/shell, unlike `QDir::homePath()` which is this app's own private sandbox and needs a PC round-trip via `blackberry-deploy -getFile` to retrieve).
 2. Get a shell on the device via [BerryCore](https://github.com/sw7ft/BerryCore)'s `dropbear` (SSH) or `term49-web` (browser-based terminal, easier to type into from a PC keyboard than the device's own touchscreen).
 3. `cat`/`tail` the log file from that shell.
 

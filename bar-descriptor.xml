@@ -26,23 +26,23 @@
 
     <!-- A universally unique application identifier. Must be unique across all BlackBerry 10 applications.
          Using a reverse DNS-style name as the id is recommended. (Eg. com.example.ExampleApplication.) Required. -->
-    <id>it.beport.client</id>
+    <id>it.bbport.client</id>
     <configuration name="Device-Debug">
        <platformArchitecture>armle-v7</platformArchitecture>
-       <asset path="arm/o.le-v7-g/Beport" entry="true" type="Qnx/Elf">Beport</asset>
+       <asset path="arm/o.le-v7-g/BBport" entry="true" type="Qnx/Elf">BBport</asset>
     </configuration>
     <configuration name="Device-Release">
        <entryPointType>Qnx/Cascades</entryPointType>
        <platformArchitecture>armle-v7</platformArchitecture>
-       <asset path="arm/o.le-v7/Beport.so" entry="true" type="Qnx/Elf">Beport.so</asset>
+       <asset path="arm/o.le-v7/BBport.so" entry="true" type="Qnx/Elf">BBport.so</asset>
     </configuration>
     <configuration name="Device-Profile">
        <platformArchitecture>armle-v7</platformArchitecture>
-       <asset path="arm-p/o.le-v7-g/Beport" entry="true" type="Qnx/Elf">Beport</asset>
+       <asset path="arm-p/o.le-v7-g/BBport" entry="true" type="Qnx/Elf">BBport</asset>
     </configuration>
     <configuration name="Simulator-Debug">
        <platformArchitecture>x86</platformArchitecture>
-       <asset path="x86/o-g/Beport" entry="true" type="Qnx/Elf">Beport</asset>
+       <asset path="x86/o-g/BBport" entry="true" type="Qnx/Elf">BBport</asset>
     </configuration>
 
     <!-- The name that is displayed in the BlackBerry 10 application installer.
@@ -56,7 +56,7 @@
 
     <!-- Fourth digit segment of the package version. First three segments are taken from the
          <versionNumber> element.  Must be an integer from 0 to 2^16-1 -->
-    <buildId>9</buildId>
+    <buildId>10</buildId>
 
     <!-- A string value (such as "v1", "2.5", or "Alpha 1") that represents the version of the application, as it should be shown to users. Optional. -->
     <!-- <versionLabel></versionLabel> -->
@@ -69,7 +69,7 @@
     <!-- <copyright></copyright> -->
 
     <!--  Name of author which is used for signing. Must match the developer name of your development certificate. -->
-    <author>Beport</author>
+    <author>BBport</author>
 
     <!--  Unique author ID assigned by signing authority. Required if using debug tokens. -->
     <!-- <authorId>ABC1234YjsnUk235h</authorId> -->
@@ -105,11 +105,11 @@
          registered to route to, and tapping the notification does nothing
          instead of foregrounding the app on that room. id must match
          kAppInvokeTarget in notificationmanager.cpp exactly. -->
-    <invoke-target id="it.beport.client.notification" system="false">
+    <invoke-target id="it.bbport.client.notification" system="false">
         <type>APPLICATION</type>
         <filter>
             <action>bb.action.OPEN</action>
-            <mime-type>application/x-beport-room</mime-type>
+            <mime-type>application/x-bbport-room</mime-type>
         </filter>
     </invoke-target>
 

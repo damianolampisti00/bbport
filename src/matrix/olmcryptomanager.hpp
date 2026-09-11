@@ -19,14 +19,14 @@ class QNetworkReply;
 // identity (an Olm Account, uploaded via /keys/upload so other devices can
 // find it), per-recipient-device 1:1 Olm sessions used to share Megolm room
 // keys, and one outbound Megolm session per room used to encrypt outgoing
-// messages. This is what lets Beport actually send messages other devices
+// messages. This is what lets BBport actually send messages other devices
 // can decrypt, and receive newly-shared room keys going forward without
 // relying on manual Element key exports (see KeyBackupManager, which still
 // owns the inbound-session cache and decrypt logic -- this class only feeds
 // it live-shared keys and handles the outbound side).
 //
 // The account and device_id are pickled to local disk (QDir::homePath() +
-// "/beport_olm/account.dat", mirroring MediaManager's cache directory
+// "/bbport_olm/account.dat", mirroring MediaManager's cache directory
 // convention) so the same device identity persists across app runs --
 // otherwise every login would look like a brand new device to everyone
 // else, unable to receive anything shared to the previous session's device.
@@ -53,13 +53,13 @@ public:
     bool isRoomEncrypted(const QString &roomId) const;
 
     // Interactive SAS ("decimal" and "emoji") device verification, both directions:
-    // Beport can initiate (startVerification(), sending .start directly to
+    // BBport can initiate (startVerification(), sending .start directly to
     // one of the account's other devices -- skipping the newer .request/
     // .ready handshake, which some clients don't surface to their user) and
     // can also accept a verification another device starts against it
     // (handleVerificationEvent() -> acceptIncomingVerification()). Either
     // way, this is what lets bridges that gate relaying on device trust
-    // (observed on Beeper's WhatsApp bridge) accept messages Beport sends.
+    // (observed on Beeper's WhatsApp bridge) accept messages BBport sends.
     QString verificationStatus() const;
     QString verificationSas() const;   // "1234 - 5678 - 9012" once ready to compare
     QString verificationEmoji() const; // "🐧 Penguin, 🐎 Horse, ..." (7 emoji), same data as verificationSas
@@ -71,7 +71,7 @@ public:
     // "Verify device": starting a second attempt while one is stuck
     // (e.g. a self-initiated .start that Element never answers, since it
     // only seems to react to its own .request flow) would otherwise make
-    // Beport silently ignore any real incoming .request until app restart,
+    // BBport silently ignore any real incoming .request until app restart,
     // since there's no timeout that clears a stuck attempt on its own.
     bool verificationActive() const;
 

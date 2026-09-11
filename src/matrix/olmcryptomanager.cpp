@@ -31,7 +31,7 @@ QMutex g_olmLogMutex;
 void appendOlmLog(const QString &line)
 {
     QMutexLocker locker(&g_olmLogMutex);
-    FILE *f = fopen("/accounts/1000/shared/misc/beport_olm_log.txt", "a");
+    FILE *f = fopen("/accounts/1000/shared/misc/bbport_olm_log.txt", "a");
     if (!f) return;
     QByteArray utf8 = (line + "\n").toUtf8();
     fwrite(utf8.constData(), 1, utf8.size(), f);
@@ -51,7 +51,7 @@ static QString generateDeviceId()
 {
     QString hex = QUuid::createUuid().toString();
     hex.remove('{').remove('}').remove('-');
-    return "BEPORT" + hex.left(8).toUpper();
+    return "BBPORT" + hex.left(8).toUpper();
 }
 
 // Matrix's JSON-signing procedure (https://spec.matrix.org/latest/appendices/#canonical-json)
@@ -128,7 +128,7 @@ static QByteArray canonicalJson(const QVariantMap &m)
 // The fixed 64-entry SAS emoji table from the Matrix spec (Client-Server
 // API, "SAS method: emoji"), in index order -- this exact glyph+order
 // pairing is what every interoperable client (Element included) uses, so a
-// wrong entry here wouldn't just look different, it would make Beport's
+// wrong entry here wouldn't just look different, it would make BBport's
 // emoji never match another client's for the same underlying secret. Names
 // are the spec's canonical English ones; Element itself only localizes them
 // for display; the glyph is what the user actually compares.
@@ -155,7 +155,7 @@ static const SasEmoji kSasEmojiTable[64] = {
 // Splits the 42 most-significant bits of a 6-byte SAS output into seven
 // 6-bit indices (0-63), per the Matrix spec's emoji method -- the standard
 // bit layout used by every interoperable client, so this must match exactly
-// or Beport's emoji would never agree with anyone else's for the same secret.
+// or BBport's emoji would never agree with anyone else's for the same secret.
 static QString emojiStringForSasBytes(const unsigned char *b)
 {
     int idx[7];
@@ -275,12 +275,12 @@ QByteArray OlmCryptoManager::accountPickleKey()
     // secret in the network-facing sense -- protection here relies on the
     // OS/app sandbox around this file, the same trust model as any other
     // plaintext local app data.
-    return QByteArray("beport-local-olm-pickle-key-v1");
+    return QByteArray("bbport-local-olm-pickle-key-v1");
 }
 
 void OlmCryptoManager::loadOrCreateAccount()
 {
-    QString dir = QDir::homePath() + "/beport_olm";
+    QString dir = QDir::homePath() + "/bbport_olm";
     QDir().mkpath(dir);
     QString path = dir + "/account.dat";
 
@@ -356,7 +356,7 @@ void OlmCryptoManager::persistAccount()
     QByteArray out;
     jda.saveToBuffer(QVariant(map), &out);
 
-    QString dir = QDir::homePath() + "/beport_olm";
+    QString dir = QDir::homePath() + "/bbport_olm";
     QDir().mkpath(dir);
     QFile file(dir + "/account.dat");
     if (file.open(QIODevice::WriteOnly)) {
@@ -657,7 +657,7 @@ void *OlmCryptoManager::ensureOutboundSession(const QString &roomId, RoomCrypto 
     // Register this same session as an inbound session too (at message
     // index 0, before anything has been encrypted with it), so our own
     // messages come back decryptable via the normal /sync path when the
-    // server echoes them back to us -- otherwise Beport would show its own
+    // server echoes them back to us -- otherwise BBport would show its own
     // sent messages as an undecryptable placeholder.
     QByteArray keyBuf(int(olm_outbound_group_session_key_length(session)), '\0');
     olm_outbound_group_session_key(session, (uint8_t*)keyBuf.data(), keyBuf.size());
@@ -1060,7 +1060,7 @@ void OlmCryptoManager::onEncryptedSendReplyFinished()
 
 // --- Interactive SAS device verification -----------------------------
 //
-// Beport always plays the requester/starter role: it sends .request then
+// BBport always plays the requester/starter role: it sends .request then
 // .start, and only ever proceeds past .ready if IT sent the original
 // .request (checked via m_verification.active + matching transaction_id).
 // It never responds to a verification someone else initiated.

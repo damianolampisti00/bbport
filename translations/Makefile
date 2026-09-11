@@ -1,4 +1,4 @@
-QMAKE_TARGET  = Beport
+QMAKE_TARGET  = BBport
 LUPDATE       = $(QNX_HOST)/usr/bin/lupdate
 LRELEASE      = $(QNX_HOST)/usr/bin/lrelease
 

@@ -1043,7 +1043,7 @@ void MessageListModel::loadOlderMessages()
     query["from"] = from;
 
     QNetworkReply *reply = m_api->apiGet(path, query);
-    reply->setProperty("beport_history_room", m_roomId);
+    reply->setProperty("bbport_history_room", m_roomId);
     connect(reply, SIGNAL(finished()), this, SLOT(onHistoryReplyFinished()));
 }
 
@@ -1053,7 +1053,7 @@ void MessageListModel::onHistoryReplyFinished()
     setLoadingHistory(false);
     if (!reply) return;
 
-    QString roomId = reply->property("beport_history_room").toString();
+    QString roomId = reply->property("bbport_history_room").toString();
     bool ok = false;
     QVariant parsed = MatrixApi::parseJson(reply, &ok);
     reply->deleteLater();

@@ -8,14 +8,14 @@
 # Momentics-managed, auto-regenerated -- see config.pri's own header comment
 config.pri
 
-# Translation build byproducts (Beport.ts/.qm are checked in; these aren't)
+# Translation build byproducts (BBport.ts/.qm are checked in; these aren't)
 translations/*.qm.tmp
 
 # On-device diagnostic logs, pulled off the phone for debugging -- never
 # meant to be committed
-beport_*_log.txt
-beport_debug.log
-beport_qml_load_error.txt
+bbport_*_log.txt
+bbport_debug.log
+bbport_qml_load_error.txt
 
 __pycache__/
 *.pyc

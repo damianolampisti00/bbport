@@ -1,6 +1,6 @@
 #include "tlsnetworkreply.hpp"
 
-#ifdef BEPORT_HAVE_NATIVE_TLS
+#ifdef BBPORT_HAVE_NATIVE_TLS
 
 #include <string.h>
 #include <stdio.h>
@@ -25,7 +25,7 @@ QMutex g_logMutex;
 void appendDebugLog(const QString &line)
 {
     QMutexLocker locker(&g_logMutex);
-    FILE *f = fopen("/accounts/1000/shared/misc/beport_tls_log.txt", "a");
+    FILE *f = fopen("/accounts/1000/shared/misc/bbport_tls_log.txt", "a");
     if (!f) return;
     QByteArray utf8 = (line + "\n").toUtf8();
     fwrite(utf8.constData(), 1, utf8.size(), f);
@@ -179,7 +179,7 @@ void TlsRequestThread::run()
     QByteArray redirectLocation;
 
     int ret = mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
-                                     reinterpret_cast<const unsigned char *>("beport"), 6);
+                                     reinterpret_cast<const unsigned char *>("bbport"), 6);
     if (ret != 0) {
         netError = QNetworkReply::UnknownNetworkError;
         netErrorString = "RNG initialization failed.";
@@ -591,4 +591,4 @@ void TlsNetworkReply::onWorkerFinished()
     m_worker = 0;
 }
 
-#endif /* BEPORT_HAVE_NATIVE_TLS */
+#endif /* BBPORT_HAVE_NATIVE_TLS */

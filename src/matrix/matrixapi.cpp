@@ -7,18 +7,18 @@
 #include <QUrl>
 #include <QDateTime>
 
-#ifdef BEPORT_HAVE_NATIVE_TLS
+#ifdef BBPORT_HAVE_NATIVE_TLS
 #include "tlsnetworkaccessmanager.hpp"
 #endif
 
 using namespace bb::data;
 
 static const char *kClientApiBase = "/_matrix/client/r0";
-static const char *kUserAgent = "Beport/1.0 (BlackBerry 10)";
+static const char *kUserAgent = "BBport/1.0 (BlackBerry 10)";
 
 MatrixApi::MatrixApi(QObject *parent) :
         QObject(parent),
-#ifdef BEPORT_HAVE_NATIVE_TLS
+#ifdef BBPORT_HAVE_NATIVE_TLS
         // Device builds do TLS 1.2 natively via mbedTLS (BB10's system
         // OpenSSL only speaks TLS 1.0, which real homeservers reject) --
         // see tlsnetworkreply.hpp. Simulator builds keep using Qt's own
@@ -98,7 +98,7 @@ void MatrixApi::setLastError(const QString &error)
 QString MatrixApi::nextTxnId()
 {
     m_txnCounter++;
-    return QString("beport-%1-%2").arg(QDateTime::currentMSecsSinceEpoch()).arg(m_txnCounter);
+    return QString("bbport-%1-%2").arg(QDateTime::currentMSecsSinceEpoch()).arg(m_txnCounter);
 }
 
 QUrl MatrixApi::buildUrl(const QString &basePath, const QString &path, const QVariantMap &query) const
@@ -208,7 +208,7 @@ void MatrixApi::loginWithPassword(const QString &homeserver, const QString &user
     body["type"] = "m.login.password";
     body["user"] = username;
     body["password"] = password;
-    body["initial_device_display_name"] = "Beport BlackBerry 10";
+    body["initial_device_display_name"] = "BBport BlackBerry 10";
     if (!m_preferredDeviceId.isEmpty()) body["device_id"] = m_preferredDeviceId;
 
     QNetworkReply *reply = apiPost("/login", body);

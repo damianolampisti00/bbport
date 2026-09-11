@@ -1,6 +1,6 @@
 #include "tlsnetworkaccessmanager.hpp"
 
-#ifdef BEPORT_HAVE_NATIVE_TLS
+#ifdef BBPORT_HAVE_NATIVE_TLS
 
 #include "tlsnetworkreply.hpp"
 
@@ -26,4 +26,4 @@ QNetworkReply* TlsNetworkAccessManager::createRequest(Operation op, const QNetwo
     return new TlsNetworkReply(op, request, body, this);
 }
 
-#endif /* BEPORT_HAVE_NATIVE_TLS */
+#endif /* BBPORT_HAVE_NATIVE_TLS */

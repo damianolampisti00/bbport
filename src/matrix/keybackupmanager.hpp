@@ -80,7 +80,7 @@ public slots:
     void unlock(const QString &recoveryKey);
     void requestSession(const QString &roomId, const QString &sessionId);
     // Fetches the plaintext Megolm session list from the TLS bridge proxy's
-    // /beport/megolm-sessions endpoint (see tools/tls-bridge-proxy.py) --
+    // /bbport/megolm-sessions endpoint (see tools/tls-bridge-proxy.py) --
     // sessions decrypted locally from an Element "Export E2E room keys" file,
     // for homeservers that block the standard Secure Key Backup API.
     void importFromProxy();

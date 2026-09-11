@@ -17,7 +17,7 @@
 import bb.cascades 1.4
 import bb.cascades.pickers 1.0
 import bb.multimedia 1.0
-import it.beport 1.0
+import it.bbport 1.0
 import "emojimap.js" as EmojiMap
 
 // Real Matrix-backed client: login, live room list (/sync), conversation
@@ -134,7 +134,7 @@ NavigationPane {
                     // ForeignWindowControl via the same
                     // "screen:?wingrp=...&winid=..." URL scheme that sample
                     // used.
-                    playing = nativeVideoPlayer.play(videoUrl, "beportVideoSurface", fwcVideoSurface.windowGroup);
+                    playing = nativeVideoPlayer.play(videoUrl, "bbportVideoSurface", fwcVideoSurface.windowGroup);
                 }
                 onVideoUrlChanged: tryStartPlayback()
                 // Called from navigationPane's onPopTransitionEnded (outer
@@ -180,7 +180,7 @@ NavigationPane {
                         }
                         horizontalAlignment: HorizontalAlignment.Center
                         verticalAlignment: VerticalAlignment.Center
-                        windowId: "beportVideoSurface"
+                        windowId: "bbportVideoSurface"
                         // No WindowProperty.SourceSize here -- that forces
                         // the window's "sampled region" to match this
                         // control's own size instead of the video's native

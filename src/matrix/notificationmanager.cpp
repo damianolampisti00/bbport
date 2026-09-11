@@ -11,12 +11,12 @@
 #include <bb/system/InvokeRequest>
 
 // Must match the <invoke-target id="..."> declared in bar-descriptor.xml.
-// A first attempt used the app's own <id> (it.beport.client) here on the
+// A first attempt used the app's own <id> (it.bbport.client) here on the
 // assumption that a self-targeted invoke needs no separate registration --
 // that was wrong: with no matching invoke-target, the Invocation Framework
 // has nothing to resolve setTarget()'s id to, so tapping the notification
 // silently did nothing instead of foregrounding the app on that room.
-static const char *const kAppInvokeTarget = "it.beport.client.notification";
+static const char *const kAppInvokeTarget = "it.bbport.client.notification";
 
 NotificationManager::NotificationManager(MatrixApi *api, MessageListModel *messageListModel, RoomListModel *roomListModel, SyncEngine *syncEngine, QObject *parent) :
         QObject(parent),
@@ -74,7 +74,7 @@ void NotificationManager::onTimelineEvent(const QString &roomId, const QVariantM
     bb::system::InvokeRequest invokeRequest;
     invokeRequest.setTarget(kAppInvokeTarget);
     invokeRequest.setAction("bb.action.OPEN");
-    invokeRequest.setMimeType("application/x-beport-room");
+    invokeRequest.setMimeType("application/x-bbport-room");
     invokeRequest.setData(roomId.toUtf8());
 
     bb::platform::Notification *notification = new bb::platform::Notification(this);

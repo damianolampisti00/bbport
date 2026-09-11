@@ -2,10 +2,10 @@
 #define TLSNETWORKREPLY_HPP_
 
 // Device-only: mbedTLS is vendored for armv7 only (see third_party/mbedtls
-// and the device{} block in Beport.pro). Simulator builds compile this
+// and the device{} block in BBport.pro). Simulator builds compile this
 // translation unit down to nothing so config.pri's IDE-managed, config-wide
 // source list can list it unconditionally without breaking Simulator-Debug.
-#ifdef BEPORT_HAVE_NATIVE_TLS
+#ifdef BBPORT_HAVE_NATIVE_TLS
 
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -88,6 +88,6 @@ private:
     qint64 m_readPos;
 };
 
-#endif /* BEPORT_HAVE_NATIVE_TLS */
+#endif /* BBPORT_HAVE_NATIVE_TLS */
 
 #endif /* TLSNETWORKREPLY_HPP_ */

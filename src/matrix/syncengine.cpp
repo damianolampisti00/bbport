@@ -21,7 +21,7 @@ static const int kRetryBackoffInitialMs = 1000;
 static const int kRetryBackoffMaxMs = 30000;
 
 // Private to this app (QDir::homePath(), not shared/misc) since nothing
-// outside Beport itself ever needs to read it -- just the next_batch token
+// outside BBport itself ever needs to read it -- just the next_batch token
 // from the last successful /sync, so a relaunch (or a crash recovery) can
 // resume with an incremental sync instead of paying for a full initial one
 // again (which re-fetches every room's recent history and, before
@@ -76,7 +76,7 @@ static void extractMediaFields(const QVariantMap &content, QVariantMap *outEvent
     // the static thumbnail) plus this external_url pointing at the real
     // Instagram page -- never an actual playable video. Flagging it here
     // lets the UI offer "watch as video", which fetches and extracts the
-    // real video through tools/tls-bridge-proxy.py's /beport/instagram-video
+    // real video through tools/tls-bridge-proxy.py's /bbport/instagram-video
     // (see its own comments -- this is HTML scraping, so it can break
     // whenever Instagram changes their page markup).
     QString externalUrl = content.value("external_url").toString();

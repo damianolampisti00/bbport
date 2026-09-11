@@ -98,7 +98,7 @@ ApplicationUI::ApplicationUI() :
     // bare mm-renderer + Screen sample shows video fine on the same phone,
     // isolating the bug to Cascades' own MediaPlayer wrapper specifically.
     // NativeVideoPlayer talks to mm-renderer directly instead.
-    qmlRegisterType<NativeVideoPlayer>("it.beport", 1, 0, "NativeVideoPlayer");
+    qmlRegisterType<NativeVideoPlayer>("it.bbport", 1, 0, "NativeVideoPlayer");
 
     // Create scene document from main.qml asset, the parent is set
     // to ensure the document gets destroyed properly at shut down.
@@ -122,7 +122,7 @@ ApplicationUI::ApplicationUI() :
         // there's no other way to see what broke. Written to shared/misc,
         // same place/convention as every other on-device diagnostic log
         // this project uses (retrievable via Term49 `cat`).
-        QFile errFile("/accounts/1000/shared/misc/beport_qml_load_error.txt");
+        QFile errFile("/accounts/1000/shared/misc/bbport_qml_load_error.txt");
         if (errFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
             QTextStream out(&errFile);
             out << "main.qml failed to load. hasErrors=" << qml->hasErrors()
@@ -165,7 +165,7 @@ void ApplicationUI::onSystemLanguageChanged()
     QCoreApplication::instance()->removeTranslator(m_pTranslator);
     // Initiate, load and install the application translation files.
     QString locale_string = QLocale().name();
-    QString file_name = QString("Beport_%1").arg(locale_string);
+    QString file_name = QString("BBport_%1").arg(locale_string);
     if (m_pTranslator->load(file_name, "app/native/qm")) {
         QCoreApplication::instance()->installTranslator(m_pTranslator);
     }

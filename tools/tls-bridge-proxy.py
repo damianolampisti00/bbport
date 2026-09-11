@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Bridges Beport (BlackBerry 10, TLS 1.0-only) to a modern TLS-only Matrix
+Bridges BBport (BlackBerry 10, TLS 1.0-only) to a modern TLS-only Matrix
 homeserver such as matrix.beeper.com.
 
 Listens on plain HTTP and forwards every request to the target homeserver
 over HTTPS using the *host's* up-to-date TLS stack (via Python's own ssl
-module -- no extra dependency for this core job). Point Beport's
+module -- no extra dependency for this core job). Point BBport's
 "Homeserver" field at wherever this ends up running instead of
 https://matrix.beeper.com directly.
 
 Runs fine two ways:
-  - On your PC: point Beport at http://<PC LAN IP>:8008. Needs a PC on the
+  - On your PC: point BBport at http://<PC LAN IP>:8008. Needs a PC on the
     same network, always running this script, whenever you use the app.
   - Directly on a rooted BB10 phone (e.g. via BerryCore's qpkg Python):
-    point Beport at http://127.0.0.1:8008 instead, and the app works
+    point BBport at http://127.0.0.1:8008 instead, and the app works
     standalone with no PC involved. This entire script -- including the
     megolm-session-import feature below -- is stdlib-only (its AES-256 is a
     small vendored pure-Python implementation, see aes256_ctr_xor(), rather
@@ -30,7 +30,7 @@ Runs fine two ways:
 
 Optionally also decrypts an Element "Export E2E room keys" file once at
 startup and serves the resulting Megolm session list locally at
-GET /beport/megolm-sessions, for homeservers (e.g. Beeper) that block the
+GET /bbport/megolm-sessions, for homeservers (e.g. Beeper) that block the
 standard Secure Key Backup API to third-party clients. This never talks to
 the homeserver -- it's a pure local file decrypt, using the same
 PBKDF2-HMAC-SHA512 + AES-256-CTR + HMAC-SHA256 "megolm session export"
@@ -289,7 +289,7 @@ def fetch_url_bytes(url, headers=None, max_redirects=6):
 
 def fetch_instagram_video_bytes(post_url):
     """Extracts and downloads the underlying video for a public Instagram
-    post/Reel URL (the Beeper Instagram bridge only ever gives Beport a
+    post/Reel URL (the Beeper Instagram bridge only ever gives BBport a
     thumbnail image plus this post link -- see
     com.beeper.unresolved_media/external_url on the m.image event -- never
     an actual video).
@@ -469,7 +469,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # doesn't exist before Qt 5.6 -- and even if it did, the redirect
         # target may itself require modern TLS that this proxy exists
         # specifically to route around. So redirects are followed HERE, on
-        # the PC, and only the final response is ever sent back to Beport.
+        # the PC, and only the final response is ever sent back to BBport.
         status, resp_headers, resp_body = None, [], b""
         for _ in range(6):
             conn = http.client.HTTPSConnection(host, timeout=60, context=_SSL_CONTEXT)
@@ -482,7 +482,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 resp_body = resp.read()
             except Exception as exc:
                 # Printed here (not just sent back as the 502 body) since
-                # Beport itself only ever shows a generic "network error" to
+                # BBport itself only ever shows a generic "network error" to
                 # the user -- this is the only place the actual cause (DNS
                 # failure, TLS/certificate error, connection refused, ...)
                 # is visible.
@@ -538,16 +538,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(resp_body)
 
     def do_GET(self):
-        if self.path == "/beport/megolm-sessions":
+        if self.path == "/bbport/megolm-sessions":
             self._serve_megolm_sessions()
             return
-        if self.path.startswith("/beport/instagram-video"):
+        if self.path.startswith("/bbport/instagram-video"):
             self._instagram_video()
             return
         self._proxy("GET")
 
     def do_POST(self):
-        if self.path == "/beport/transcode-video":
+        if self.path == "/bbport/transcode-video":
             self._transcode_video()
             return
         self._proxy("POST")
@@ -564,7 +564,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     server = http.server.ThreadingHTTPServer(("0.0.0.0", LISTEN_PORT), ProxyHandler)
-    print("Beport TLS bridge: http://0.0.0.0:%d -> https://%s" % (LISTEN_PORT, TARGET_HOST))
+    print("BBport TLS bridge: http://0.0.0.0:%d -> https://%s" % (LISTEN_PORT, TARGET_HOST))
     print("Premi Ctrl+C per fermarlo.")
     try:
         server.serve_forever()

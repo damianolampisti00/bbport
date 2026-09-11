@@ -27,7 +27,7 @@ using namespace bb::data;
 // Temporary diagnostic logging (SSSS unwrap bring-up). Remove once resolved.
 static void appendSsssLog(const QString &line)
 {
-    QFile f("/accounts/1000/shared/misc/beport_ssss_log.txt");
+    QFile f("/accounts/1000/shared/misc/bbport_ssss_log.txt");
     if (f.open(QIODevice::Append)) {
         f.write((line + "\n").toUtf8());
         f.close();
@@ -35,12 +35,12 @@ static void appendSsssLog(const QString &line)
 }
 
 // Dedicated address for the local key-import helper (tools/tls-bridge-proxy.py's
-// /beport/megolm-sessions endpoint) -- deliberately independent of
+// /bbport/megolm-sessions endpoint) -- deliberately independent of
 // MatrixApi::homeserver(), which now points at the real homeserver directly
 // (native TLS, see tlsnetworkreply.cpp) rather than at this proxy. Start the
 // proxy on the phone itself (BerryCore's python3) when an import is needed;
 // it isn't required for normal chat traffic anymore.
-static const char *kMegolmProxyUrl = "http://127.0.0.1:8008/beport/megolm-sessions";
+static const char *kMegolmProxyUrl = "http://127.0.0.1:8008/bbport/megolm-sessions";
 
 // Matrix uses unpadded base64 throughout; Qt's QByteArray::fromBase64() is
 // not reliably tolerant of missing '=' padding, so decode with libolm's own
@@ -239,7 +239,7 @@ void KeyBackupManager::onMegolmSecretReplyFinished()
         // Temporary diagnostic: dump the raw account_data body (iv/ciphertext/
         // mac skeleton, not message content) so the SSSS unwrap can be
         // reproduced/debugged offline. Remove once resolved.
-        QFile logFile("/accounts/1000/shared/misc/beport_megolm_secret.txt");
+        QFile logFile("/accounts/1000/shared/misc/bbport_megolm_secret.txt");
         if (logFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
             logFile.write(rawBody);
             logFile.close();
@@ -336,7 +336,7 @@ void KeyBackupManager::fetchBackupVersion(const QByteArray &candidatePrivateKey)
     m_pkDecryptionMemory = mem;
 
     QNetworkReply *reply = m_api->apiGet("/room_keys/version");
-    reply->setProperty("beport_pending_pubkey", pubkey);
+    reply->setProperty("bbport_pending_pubkey", pubkey);
     connect(reply, SIGNAL(finished()), this, SLOT(onVersionReplyFinished()));
 }
 
@@ -348,7 +348,7 @@ void KeyBackupManager::onVersionReplyFinished()
 
     bool ok = false;
     QVariant parsed = MatrixApi::parseJson(reply, &ok);
-    QByteArray expectedPubkey = reply->property("beport_pending_pubkey").toByteArray();
+    QByteArray expectedPubkey = reply->property("bbport_pending_pubkey").toByteArray();
     reply->deleteLater();
 
     QVariantMap map = parsed.toMap();

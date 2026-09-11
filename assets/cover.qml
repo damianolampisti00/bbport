@@ -1,6 +1,6 @@
 import bb.cascades 1.4
 
-// Active Frame content shown on the Home screen when Beport is minimized
+// Active Frame content shown on the Home screen when BBport is minimized
 // (BB10's "cover mode"). Non-interactive and unanimated, per SceneCover's
 // own contract -- just a live label bound to roomListModel.totalUnreadCount.
 Container {

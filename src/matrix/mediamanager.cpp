@@ -520,9 +520,9 @@ void MediaManager::debugLog(const QString &line)
     // the latter is unreachable from Term49/BerryCore without a Developer
     // Mode-paired blackberry-deploy -getFile round-trip from a PC, while
     // shared/misc is a plain `cat` away from the on-device shell already
-    // used for every other diagnostic log this session (beport_tls_log.txt
+    // used for every other diagnostic log this session (bbport_tls_log.txt
     // etc).
-    QFile file("/accounts/1000/shared/misc/beport_debug.log");
+    QFile file("/accounts/1000/shared/misc/bbport_debug.log");
     if (!file.open(QIODevice::Append | QIODevice::Text)) return;
     QTextStream out(&file);
     out << QDateTime::currentDateTime().toString("HH:mm:ss.zzz") << "  " << line << "\n";

@@ -1,10 +1,12 @@
-# Beport
+# BBport
 
 A native [Matrix](https://matrix.org) chat client for BlackBerry 10, written in C++ against the Cascades UI framework (Qt 4.8 / BB10 Native SDK 10.3.1).
 
-Beport talks directly to any Matrix homeserver — including [Beeper](https://www.beeper.com), which bridges iMessage, WhatsApp, Instagram DMs, Signal, and more into Matrix rooms — with full end-to-end encryption, native TLS 1.2 (working around BB10's decade-old system OpenSSL, which only speaks TLS 1.0 and is rejected outright by modern homeservers), and on-device media handling (photos, videos, voice messages, and even Instagram Reels).
+BBport talks directly to any Matrix homeserver — including [Beeper](https://www.beeper.com), which bridges iMessage, WhatsApp, Instagram DMs, Signal, and more into Matrix rooms — with full end-to-end encryption, native TLS 1.2 (working around BB10's decade-old system OpenSSL, which only speaks TLS 1.0 and is rejected outright by modern homeservers), and on-device media handling (photos, videos, voice messages, and even Instagram Reels).
 
 This is a hobby project built for a specific piece of ten-year-old hardware most people don't own. If you're one of the people who still carries a BlackBerry 10 device daily, welcome — this is for you.
+
+**A note on how this was built.** This entire project — every feature, every bug fix, this README, the architecture decisions — was built through "vibe coding" with [Claude Code](https://claude.com/claude-code): describing what was wanted or broken in plain language and having Claude write, debug, and iterate on the actual C++/QML directly against a real BlackBerry Q5, with no prior Cascades/BB10 development experience on the human side. It's included here for transparency, not as a disclaimer to lower expectations of the code itself.
 
 ## Screenshots
 
@@ -15,7 +17,7 @@ This is a hobby project built for a specific piece of ten-year-old hardware most
 - **Messaging**: text, photos, videos, voice messages (recorded on-device, Opus/Ogg), files, replies, emoji reactions, message editing, message deletion, typing indicators, read receipts.
 - **End-to-end encryption**: full Olm (1:1) and Megolm (group) session support, SAS ("emoji") device verification, Secure Key Backup (SSSS) unlock via Recovery Key entered right on the login screen — decrypts your entire message history the moment you log in, no separate manual step.
 - **Rooms**: search, unread counts, avatars (including the Matrix convention of showing the other participant's own profile picture for direct messages that never set a room avatar), a "hidden chats" list for rooms you don't want cluttering the inbox.
-- **Media**: downloads and uploads work over Beport's own native TLS 1.2 stack — no external proxy required. Video is transcoded on-device with `ffmpeg` for the phone's hardware decoder, and Instagram Reels shared into a chat (via Beeper's Instagram bridge) can be fetched and played in-app via `yt-dlp`, both running locally through [BerryCore](https://github.com/sw7ft/BerryCore), a community QNX/BB10 userland.
+- **Media**: downloads and uploads work over BBport's own native TLS 1.2 stack — no external proxy required. Video is transcoded on-device with `ffmpeg` for the phone's hardware decoder, and Instagram Reels shared into a chat (via Beeper's Instagram bridge) can be fetched and played in-app via `yt-dlp`, both running locally through [BerryCore](https://github.com/sw7ft/BerryCore), a community QNX/BB10 userland.
 - **Native video playback**: talks to QNX's `mm-renderer` service directly, bypassing a real bug in Cascades' own `bb::multimedia::MediaPlayer` wrapper that renders solid black video on real hardware.
 - **Notifications**: BlackBerry Hub integration, including an explicit opt-in into Instant Preview (the pop-up banner style other Hub-integrated apps use), and disabled entirely during the very first sync so logging in doesn't produce a notification for every message in your history.
 - **Fast resume**: the sync position and a snapshot of your room list are cached to disk, so relaunching the app (or recovering from a crash) picks up where it left off with an incremental sync instead of re-downloading everything.
@@ -25,9 +27,9 @@ This is a hobby project built for a specific piece of ten-year-old hardware most
 This is a beta. Specifically:
 
 - **No persistent login.** Credentials are not saved; you re-enter them every time the app is (re)started. (The fast-resume sync cache above still applies once you're logged back in.)
-- **No in-app room creation or invites.** You can join and accept invites to existing rooms, but can't start a brand new conversation or invite someone from within Beport. Create the room elsewhere (e.g. Element, or the Beeper apps for bridged chats) and it will show up here.
+- **No in-app room creation or invites.** You can join and accept invites to existing rooms, but can't start a brand new conversation or invite someone from within BBport. Create the room elsewhere (e.g. Element, or the Beeper apps for bridged chats) and it will show up here.
 - **No background/headless push.** Notifications only fire while the app process is alive (foreground or backgrounded, not fully terminated by the OS) — there's no separate headless service keeping the sync loop running after you close the app.
-- **Edits aren't shown "in place."** Sending an edit produces a real Matrix `m.replace` event (other clients like Element render it correctly, collapsed into the original message), but Beport itself currently displays it as a new message prefixed with `*` rather than replacing the original bubble.
+- **Edits aren't shown "in place."** Sending an edit produces a real Matrix `m.replace` event (other clients like Element render it correctly, collapsed into the original message), but BBport itself currently displays it as a new message prefixed with `*` rather than replacing the original bubble.
 - **Single account only.**
 
 ## Requirements
@@ -38,7 +40,7 @@ This is a beta. Specifically:
 
 ## Building
 
-Beport builds entirely from the command line — no BlackBerry Momentics IDE required (useful since Momentics' on-device debugging needs a signed debug token, which BlackBerry's token servers no longer issue).
+BBport builds entirely from the command line — no BlackBerry Momentics IDE required (useful since Momentics' on-device debugging needs a signed debug token, which BlackBerry's token servers no longer issue).
 
 ```sh
 # From the BBNDK host tools, with QNX_HOST/QNX_TARGET set to your install:
@@ -46,11 +48,11 @@ export QNX_HOST=/path/to/bbndk/host_10_3_1_12/<platform>/x86
 export QNX_TARGET=/path/to/bbndk/target_10_3_1_995/qnx6
 export PATH="$QNX_HOST/usr/bin:$PATH"
 
-cd Beport
+cd BBport
 make -I "$QNX_TARGET/usr/include" Device-Debug     # or Device-Release / Device-Profile
 ```
 
-This produces `arm/o.le-v7-g/Beport` (Debug) or `arm/o.le-v7/Beport.so` (Release), matching the paths declared in `bar-descriptor.xml`.
+This produces `arm/o.le-v7-g/BBport` (Debug) or `arm/o.le-v7/BBport.so` (Release), matching the paths declared in `bar-descriptor.xml`.
 
 To package a `.bar` for sideloading, use BlackBerry's `blackberry-nativepackager` against `bar-descriptor.xml`, or a third-party packaging/sideload tool (e.g. Darcy BB Tools) if you don't have a code-signing debug token.
 
@@ -58,7 +60,7 @@ Bump `<buildId>` in `bar-descriptor.xml` before each new package you intend to i
 
 ### Simulator builds
 
-The `blackberry-x86-qcc` simulator target is supported by the project (`Beport.pro` has a `simulator{}` scope), but native TLS (`BEPORT_HAVE_NATIVE_TLS`) is device-only; the simulator falls back to Qt's own `QSslSocket`-backed networking, which cannot reach a modern homeserver directly (see [Architecture](#architecture) below) — it would need `tools/tls-bridge-proxy.py` pointed at as the homeserver instead.
+The `blackberry-x86-qcc` simulator target is supported by the project (`BBport.pro` has a `simulator{}` scope), but native TLS (`BBPORT_HAVE_NATIVE_TLS`) is device-only; the simulator falls back to Qt's own `QSslSocket`-backed networking, which cannot reach a modern homeserver directly (see [Architecture](#architecture) below) — it would need `tools/tls-bridge-proxy.py` pointed at as the homeserver instead.
 
 ## Installing
 
@@ -82,7 +84,7 @@ A few of the non-obvious technical decisions, for anyone digging into the code:
 
 ## Third-party components
 
-Beport itself is licensed under the GNU General Public License v3.0 (see [`LICENSE`](LICENSE)). It vendors and links against:
+BBport itself is licensed under the GNU General Public License v3.0 (see [`LICENSE`](LICENSE)). It vendors and links against:
 
 | Component | Used for | License |
 |---|---|---|
@@ -93,7 +95,7 @@ Beport itself is licensed under the GNU General Public License v3.0 (see [`LICEN
 | [BerryCore](https://github.com/sw7ft/BerryCore) | On-device `ffmpeg`/`yt-dlp`/Python for media features | Not bundled — a separate userland the user installs themselves |
 | BlackBerry Native SDK / Cascades headers | UI framework, platform APIs | Apache License 2.0, © BlackBerry Limited |
 
-No source from any of the above is redistributed in a way that would require relicensing this repository under their terms; Beport's own code is GPLv3 as noted above.
+No source from any of the above is redistributed in a way that would require relicensing this repository under their terms; BBport's own code is GPLv3 as noted above.
 
 ## Contributing
 

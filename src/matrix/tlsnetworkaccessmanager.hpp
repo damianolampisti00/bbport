@@ -2,8 +2,8 @@
 #define TLSNETWORKACCESSMANAGER_HPP_
 
 // Device-only -- see tlsnetworkreply.hpp for why this compiles to nothing
-// when BEPORT_HAVE_NATIVE_TLS isn't defined (Simulator builds).
-#ifdef BEPORT_HAVE_NATIVE_TLS
+// when BBPORT_HAVE_NATIVE_TLS isn't defined (Simulator builds).
+#ifdef BBPORT_HAVE_NATIVE_TLS
 
 #include <QNetworkAccessManager>
 
@@ -23,6 +23,6 @@ protected:
                                           QIODevice *outgoingData = 0);
 };
 
-#endif /* BEPORT_HAVE_NATIVE_TLS */
+#endif /* BBPORT_HAVE_NATIVE_TLS */
 
 #endif /* TLSNETWORKACCESSMANAGER_HPP_ */

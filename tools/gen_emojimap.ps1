@@ -1,5 +1,5 @@
-$emojiDir = "C:\Users\silva\momentics-workspace\Beport\assets\emoji"
-$outFile = "C:\Users\silva\momentics-workspace\Beport\assets\emojimap.js"
+$emojiDir = "C:\Users\silva\momentics-workspace\BBport\assets\emoji"
+$outFile = "C:\Users\silva\momentics-workspace\BBport\assets\emojimap.js"
 
 $files = Get-ChildItem $emojiDir -Filter *.png | Sort-Object Name
 

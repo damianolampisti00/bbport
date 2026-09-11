@@ -16,7 +16,7 @@ class MediaManager;
 class QNetworkReply;
 class QTimer;
 
-// Wraps a Cascades ArrayDataModel with the room-list rows Beport shows:
+// Wraps a Cascades ArrayDataModel with the room-list rows BBport shows:
 // {roomId, name, avatarMxc, avatarLocalUrl, lastBody, lastSender, lastTs,
 //  unreadCount, encrypted, isTyping, isInvite, inviterId}. Sorted by lastTs
 // descending, with pending invites always pinned to the top.

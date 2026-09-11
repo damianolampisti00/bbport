@@ -44,7 +44,7 @@ bool NativeVideoPlayer::play(const QString &fileUrl, const QString &windowId, co
 
     // Context names must be unique system-wide; qualify with our own
     // pointer value rather than a fixed string in case of rapid reopen.
-    QByteArray ctxName = QString("beportvideo_%1").arg(reinterpret_cast<quintptr>(this)).toUtf8();
+    QByteArray ctxName = QString("bbportvideo_%1").arg(reinterpret_cast<quintptr>(this)).toUtf8();
     m_context = mmr_context_create(m_connection, ctxName.constData(), 0, S_IRWXU | S_IRWXG | S_IRWXO);
     if (!m_context) {
         cleanup();

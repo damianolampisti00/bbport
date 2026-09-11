@@ -1,4 +1,4 @@
-APP_NAME = Beport
+APP_NAME = BBport
 
 CONFIG += qt warn_on cascades10
 QT += network
@@ -33,7 +33,7 @@ simulator {
 # Qt 4.8's QSslSocket can't be pointed at a newer one, so real homeservers
 # are otherwise unreachable without an external TLS-bridging proxy) ---
 device {
-    DEFINES += BEPORT_HAVE_NATIVE_TLS
+    DEFINES += BBPORT_HAVE_NATIVE_TLS
     INCLUDEPATH += $$quote($$_PRO_FILE_PWD_/third_party/mbedtls/include)
     LIBS += $$quote($$_PRO_FILE_PWD_/third_party/mbedtls/lib/armv7/libmbedtls_all.a)
     OTHER_FILES += $$quote($$_PRO_FILE_PWD_/assets/cacert.pem)
