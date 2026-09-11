@@ -79,8 +79,32 @@ Container {
     Container {
         visible: (ListItemData.msgtype === "m.image" || ListItemData.msgtype === "m.sticker") && ListItemData.mediaMxc && ListItemData.mediaMxc.length > 0
         layout: DockLayout {}
-        preferredWidth: ListItemData.msgtype === "m.sticker" ? ui.du(20) : ui.du(40)
-        preferredHeight: ListItemData.msgtype === "m.sticker" ? ui.du(20) : ui.du(30)
+        // Sized to the photo's own aspect ratio (content.info.w/h --
+        // ListItemData.mediaWidth/mediaHeight, the same fields the video
+        // letterbox calc below uses) instead of a fixed box. A fixed
+        // 40x30du box squeezed every portrait photo into a landscape frame
+        // (or pillarboxed a landscape one) with big empty margins either
+        // way -- every other Matrix client sizes the bubble to the image.
+        property real maxBoxW: ListItemData.msgtype === "m.sticker" ? ui.du(22) : ui.du(46)
+        property real maxBoxH: ListItemData.msgtype === "m.sticker" ? ui.du(22) : ui.du(46)
+        // Floor so a very wide/short (or very tall/narrow) image doesn't
+        // collapse to a sliver on the axis the aspect-ratio scale shrinks
+        // hardest -- ImageView's own AspectFit below just letterboxes the
+        // extra space on that axis rather than stretching, so this never
+        // distorts the image.
+        property real minBox: ui.du(12)
+        preferredWidth: {
+            var w = ListItemData.mediaWidth, h = ListItemData.mediaHeight;
+            if (w <= 0 || h <= 0) return maxBoxW;
+            var scale = Math.min(maxBoxW / w, maxBoxH / h);
+            return Math.max(minBox, Math.round(w * scale));
+        }
+        preferredHeight: {
+            var w = ListItemData.mediaWidth, h = ListItemData.mediaHeight;
+            if (w <= 0 || h <= 0) return maxBoxH;
+            var scale = Math.min(maxBoxW / w, maxBoxH / h);
+            return Math.max(minBox, Math.round(h * scale));
+        }
         ImageView {
             imageSource: ListItemData.mediaLocalUrl && ListItemData.mediaLocalUrl.length > 0 ? ListItemData.mediaLocalUrl : ""
             horizontalAlignment: HorizontalAlignment.Fill
@@ -93,25 +117,6 @@ Container {
             // interaction with the list's own touch handling), and
             // ListView::triggered() is the documented, reliable way
             // to react to a tap on a row.
-        }
-        // Reel/post from the Instagram bridge (see extractMediaFields() in
-        // syncengine.cpp/messagelistmodel.cpp): this is only ever a static
-        // thumbnail, so a play badge signals that tapping fetches and plays
-        // the real video instead of just opening the image full-screen.
-        Container {
-            visible: ListItemData.instagramUrl && ListItemData.instagramUrl.length > 0
-            horizontalAlignment: HorizontalAlignment.Center
-            verticalAlignment: VerticalAlignment.Center
-            preferredWidth: ui.du(6); preferredHeight: ui.du(6)
-            background: Color.create("#000000")
-            opacity: 0.6
-            layout: DockLayout {}
-            EmojiIcon {
-                emoji: "▶"
-                iconSize: ui.du(3.5)
-                horizontalAlignment: HorizontalAlignment.Center
-                verticalAlignment: VerticalAlignment.Center
-            }
         }
     }
     Container {

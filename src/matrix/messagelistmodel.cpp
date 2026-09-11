@@ -865,6 +865,39 @@ void MessageListModel::sendImage(const QString &localFilePath)
     m_media->upload(localFilePath);
 }
 
+void MessageListModel::sendVideo(const QString &localFilePath)
+{
+    if (m_roomId.isEmpty() || localFilePath.isEmpty()) return;
+    PendingUpload pending;
+    pending.roomId = m_roomId;
+    pending.msgtype = "m.video";
+    pending.durationMs = 0;
+    m_pendingUploads[localFilePath] = pending;
+    m_media->upload(localFilePath);
+}
+
+void MessageListModel::sendFile(const QString &localFilePath)
+{
+    if (m_roomId.isEmpty() || localFilePath.isEmpty()) return;
+    PendingUpload pending;
+    pending.roomId = m_roomId;
+    pending.msgtype = "m.file";
+    pending.durationMs = 0;
+    m_pendingUploads[localFilePath] = pending;
+    m_media->upload(localFilePath);
+}
+
+void MessageListModel::sendAudioFile(const QString &localFilePath)
+{
+    if (m_roomId.isEmpty() || localFilePath.isEmpty()) return;
+    PendingUpload pending;
+    pending.roomId = m_roomId;
+    pending.msgtype = "m.audio";
+    pending.durationMs = 0;
+    m_pendingUploads[localFilePath] = pending;
+    m_media->upload(localFilePath);
+}
+
 void MessageListModel::sendAudio(const QString &localFilePath, int durationMs)
 {
     if (m_roomId.isEmpty() || localFilePath.isEmpty()) return;
@@ -873,7 +906,13 @@ void MessageListModel::sendAudio(const QString &localFilePath, int durationMs)
     pending.msgtype = "m.audio";
     pending.durationMs = durationMs;
     m_pendingUploads[localFilePath] = pending;
-    m_media->upload(localFilePath);
+    // Transcodes to Ogg/Opus before uploading (see
+    // MediaManager::uploadAudioAsOgg()) so other Matrix clients render this
+    // as an inline voice message instead of a generic audio-file
+    // attachment; onUploadFinished() below still keys off localFilePath
+    // (the untouched m4a recording), which uploadFinished() reports back
+    // regardless of the transcode outcome.
+    m_media->uploadAudioAsOgg(localFilePath);
 }
 
 void MessageListModel::onUploadFinished(const QString &localFilePath, const QString &mxcUri, const QString &mimeType, bool ok)
@@ -882,9 +921,10 @@ void MessageListModel::onUploadFinished(const QString &localFilePath, const QStr
     PendingUpload pending = m_pendingUploads.take(localFilePath);
     if (!ok) {
         if (pending.roomId == m_roomId) {
-            m_lastSendError = pending.msgtype == "m.audio"
-                    ? "Failed to send audio."
-                    : "Failed to upload image.";
+            if (pending.msgtype == "m.audio") m_lastSendError = "Failed to send audio.";
+            else if (pending.msgtype == "m.video") m_lastSendError = "Failed to send video.";
+            else if (pending.msgtype == "m.file") m_lastSendError = "Failed to send file.";
+            else m_lastSendError = "Failed to upload image.";
             emit sendFailed(m_lastSendError);
         }
         return;
@@ -897,11 +937,23 @@ void MessageListModel::onUploadFinished(const QString &localFilePath, const QStr
         info["duration"] = pending.durationMs;
     }
 
+    // Ogg/Opus is what actually makes other Matrix clients render this as
+    // an inline voice-message bubble rather than a plain audio-file
+    // attachment (see MediaManager::uploadAudioAsOgg()); mimeType only
+    // comes back as audio/ogg when that transcode succeeded, so the
+    // fallback path (still audio/mp4) is sent as an ordinary m.audio
+    // instead of falsely claiming to be a voice message it isn't.
+    bool isVoiceMessage = pending.msgtype == "m.audio" && mimeType == "audio/ogg";
+    QString body = isVoiceMessage
+            ? (QFileInfo(localFilePath).completeBaseName() + ".ogg")
+            : QFileInfo(localFilePath).fileName();
+
     QVariantMap content;
     content["msgtype"] = pending.msgtype;
-    content["body"] = QFileInfo(localFilePath).fileName();
+    content["body"] = body;
     content["url"] = mxcUri;
     content["info"] = info;
+    if (isVoiceMessage) content["org.matrix.msc3245.voice_message"] = QVariantMap();
 
     QString txnId = m_api->nextTxnId();
 

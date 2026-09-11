@@ -10,14 +10,13 @@
 #include <bb/platform/NotificationSettingsError>
 #include <bb/system/InvokeRequest>
 
-// Must match bar-descriptor.xml's <id> -- InvokeRequest::setTarget() expects
-// "the identity of the receiver as stated in its BAR manifest", and since
-// we're both the sender (attaching this to our own Notification) and the
-// intended receiver (ApplicationUI's InvokeManager), that's simply our own
-// app id. No separate <invoke-target> BAR declaration is needed for this:
-// that mechanism is for being discovered/invoked by OTHER apps, which isn't
-// the case here.
-static const char *const kAppInvokeTarget = "it.beport.client";
+// Must match the <invoke-target id="..."> declared in bar-descriptor.xml.
+// A first attempt used the app's own <id> (it.beport.client) here on the
+// assumption that a self-targeted invoke needs no separate registration --
+// that was wrong: with no matching invoke-target, the Invocation Framework
+// has nothing to resolve setTarget()'s id to, so tapping the notification
+// silently did nothing instead of foregrounding the app on that room.
+static const char *const kAppInvokeTarget = "it.beport.client.notification";
 
 NotificationManager::NotificationManager(MatrixApi *api, MessageListModel *messageListModel, RoomListModel *roomListModel, SyncEngine *syncEngine, QObject *parent) :
         QObject(parent),

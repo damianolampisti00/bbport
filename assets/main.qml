@@ -360,6 +360,7 @@ NavigationPane {
                 property string contactName: ""
                 property bool isRecording: false
                 property string recordingPath: ""
+                property bool attachMenuVisible: false
                 // sendFailed() previously had no QML listener at all -- a
                 // failed send (network error, encryption error, server
                 // rejection) was completely silent, since the composer
@@ -423,7 +424,13 @@ NavigationPane {
                     reelLoading = false;
                     if (reelWatcher.ok) {
                         reelError = false;
-                        navigationPane.openVideo(reelWatcher.localFileUrl, 0, 1080, 1920);
+                        // Trial: hands off to BB10's own Videos app instead of
+                        // the in-app videoViewerPage -- see
+                        // MediaManager::openVideoExternally(). Revert by
+                        // swapping this back to
+                        // navigationPane.openVideo(reelWatcher.localFileUrl, 0, 1080, 1920)
+                        // if it doesn't work out.
+                        mediaManager.openVideoExternally(reelWatcher.localFileUrl);
                     } else {
                         reelError = true;
                     }
@@ -432,53 +439,6 @@ NavigationPane {
                 Container {
                     layout: DockLayout {}
                     background: Color.create("#101316")
-
-                    Container {
-                        // Shown while a tapped Reel is being fetched (see
-                        // messageView.onTriggered below, which sets
-                        // reelLoading true when fetchInstagramVideo() didn't
-                        // return an already-cached path) -- otherwise a tap
-                        // gave zero feedback until the video popped open
-                        // (or silently didn't, on failure), which looked
-                        // like nothing happened.
-                        visible: reelLoading
-                        horizontalAlignment: HorizontalAlignment.Center
-                        verticalAlignment: VerticalAlignment.Top
-                        topMargin: ui.du(2)
-                        background: Color.create("#26313d")
-                        layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
-                        leftPadding: ui.du(1.5); rightPadding: ui.du(1.5)
-                        topPadding: ui.du(0.8); bottomPadding: ui.du(0.8)
-                        ActivityIndicator {
-                            running: reelLoading
-                            preferredWidth: ui.du(3); preferredHeight: ui.du(3)
-                            rightMargin: ui.du(1)
-                        }
-                        Label {
-                            text: "Loading reel..."
-                            textStyle.color: Color.White
-                            verticalAlignment: VerticalAlignment.Center
-                        }
-                    }
-                    Container {
-                        // Reel fetch failed (Instagram scraping is fragile
-                        // by nature -- see fetch_instagram_video_bytes() in
-                        // tools/tls-bridge-proxy.py). Stays up until the
-                        // next Reel tap rather than auto-hiding after a
-                        // delay, to avoid a QML Timer element here.
-                        visible: reelError
-                        horizontalAlignment: HorizontalAlignment.Center
-                        verticalAlignment: VerticalAlignment.Top
-                        topMargin: ui.du(2)
-                        background: Color.create("#4a2020")
-                        layout: StackLayout {}
-                        leftPadding: ui.du(1.5); rightPadding: ui.du(1.5)
-                        topPadding: ui.du(0.8); bottomPadding: ui.du(0.8)
-                        Label {
-                            text: "Couldn't load the reel."
-                            textStyle.color: Color.White
-                        }
-                    }
 
                     Container {
                         layout: StackLayout {}
@@ -549,14 +509,24 @@ NavigationPane {
                                     reelError = false;
                                     var cached = mediaManager.fetchInstagramVideo(item.instagramUrl);
                                     if (cached && cached.length > 0) {
-                                        navigationPane.openVideo(cached, 0, 1080, 1920);
+                                        // Already fetched by an earlier tap (this or a
+                                        // previous session) -- instagramVideoResult won't
+                                        // fire again for a cache hit, so the probed
+                                        // duration/dimensions are read directly here
+                                        // instead, the same way onReelWatcherChanged reads
+                                        // them off instagramVideoResult for a fresh fetch.
+                                        // Trial: see the reelWatcher branch above.
+                                        mediaManager.openVideoExternally(cached);
                                     } else {
                                         reelLoading = true;
                                     }
                                 } else if (item.msgtype === "m.image" && item.mediaLocalUrl && item.mediaLocalUrl.length > 0) {
                                     navigationPane.openImage(item.mediaLocalUrl);
                                 } else if (item.msgtype === "m.video" && item.mediaLocalUrl && item.mediaLocalUrl.length > 0) {
-                                    navigationPane.openVideo(item.mediaLocalUrl, item.mediaDuration, item.mediaWidth, item.mediaHeight);
+                                    // Trial: see the reelWatcher branch above. Revert with
+                                    // navigationPane.openVideo(item.mediaLocalUrl,
+                                    // item.mediaDuration, item.mediaWidth, item.mediaHeight).
+                                    mediaManager.openVideoExternally(item.mediaLocalUrl);
                                 } else if (item.msgtype === "m.audio" && item.mediaLocalUrl && item.mediaLocalUrl.length > 0) {
                                     if (item.eventId === messageListModel.playingAudioEventId && messageListModel.audioIsPlaying) {
                                         chatAudioPlayer.pause();
@@ -803,7 +773,7 @@ NavigationPane {
                             ImageButton {
                                 defaultImageSource: EmojiMap.emojiAsset("📎")
                                 preferredWidth: ui.du(7)
-                                onClicked: imagePicker.open()
+                                onClicked: attachMenuVisible = true
                             }
                             TextField {
                                 id: composer
@@ -849,6 +819,142 @@ NavigationPane {
                         }
                         }
                     }
+
+                    // Declared last among this DockLayout's children so they
+                    // paint on top of messageView -- Cascades stacks
+                    // same-position DockLayout siblings in declaration order,
+                    // and messageView (declared above) was covering these at
+                    // their old position right after the titleBar, right
+                    // where the top of the message list also sits.
+                    Container {
+                        // Shown while a tapped Reel is being fetched (see
+                        // messageView.onTriggered below, which sets
+                        // reelLoading true when fetchInstagramVideo() didn't
+                        // return an already-cached path) -- otherwise a tap
+                        // gave zero feedback until the video popped open
+                        // (or silently didn't, on failure), which looked
+                        // like nothing happened.
+                        visible: reelLoading
+                        horizontalAlignment: HorizontalAlignment.Center
+                        verticalAlignment: VerticalAlignment.Top
+                        topMargin: ui.du(2)
+                        background: Color.create("#26313d")
+                        layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
+                        leftPadding: ui.du(1.5); rightPadding: ui.du(1.5)
+                        topPadding: ui.du(0.8); bottomPadding: ui.du(0.8)
+                        ActivityIndicator {
+                            running: reelLoading
+                            preferredWidth: ui.du(3); preferredHeight: ui.du(3)
+                            rightMargin: ui.du(1)
+                        }
+                        Label {
+                            text: "Loading reel..."
+                            textStyle.color: Color.White
+                            verticalAlignment: VerticalAlignment.Center
+                        }
+                    }
+                    Container {
+                        // Reel fetch failed (Instagram scraping is fragile
+                        // by nature -- see fetch_instagram_video_bytes() in
+                        // tools/tls-bridge-proxy.py). Stays up until the
+                        // next Reel tap rather than auto-hiding after a
+                        // delay, to avoid a QML Timer element here.
+                        visible: reelError
+                        horizontalAlignment: HorizontalAlignment.Center
+                        verticalAlignment: VerticalAlignment.Top
+                        topMargin: ui.du(2)
+                        background: Color.create("#4a2020")
+                        layout: StackLayout {}
+                        leftPadding: ui.du(1.5); rightPadding: ui.du(1.5)
+                        topPadding: ui.du(0.8); bottomPadding: ui.du(0.8)
+                        Label {
+                            text: "Couldn't load the reel."
+                            textStyle.color: Color.White
+                        }
+                    }
+
+                    // "Attach" menu (📎 tap): a plain overlay rather than a
+                    // pushed Sheet page, so it's a one-tap dismiss and never
+                    // interrupts the composer's focus/scroll state. Declared
+                    // last (see the comment on the reel indicators above) so
+                    // it paints on top of everything, including those.
+                    Container {
+                        visible: attachMenuVisible
+                        horizontalAlignment: HorizontalAlignment.Fill
+                        verticalAlignment: VerticalAlignment.Fill
+                        layout: DockLayout {}
+                        onTouch: {
+                            if (event.isUp()) attachMenuVisible = false;
+                        }
+                        // Dimmed backdrop, kept as its own node instead of a
+                        // background+opacity on this whole Container -- that
+                        // opacity would have cascaded to the panel below too
+                        // (a Cascades Container's opacity applies to its
+                        // whole subtree), washing out the menu itself along
+                        // with the chat behind it instead of just dimming
+                        // the backdrop.
+                        Container {
+                            horizontalAlignment: HorizontalAlignment.Fill
+                            verticalAlignment: VerticalAlignment.Fill
+                            background: Color.create("#000000")
+                            opacity: 0.55
+                        }
+                        Container {
+                            horizontalAlignment: HorizontalAlignment.Fill
+                            verticalAlignment: VerticalAlignment.Bottom
+                            background: Color.create("#1a2026")
+                            layout: StackLayout {}
+                            topPadding: ui.du(1); bottomPadding: ui.du(1)
+                            Container {
+                                layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
+                                leftPadding: ui.du(2); rightPadding: ui.du(2)
+                                topPadding: ui.du(1); bottomPadding: ui.du(1)
+                                onTouch: {
+                                    if (!event.isUp()) return;
+                                    attachMenuVisible = false;
+                                    imagePicker.open();
+                                }
+                                EmojiIcon { emoji: "📷"; iconSize: ui.du(3); rightMargin: ui.du(1.5); verticalAlignment: VerticalAlignment.Center }
+                                Label { text: "Picture"; verticalAlignment: VerticalAlignment.Center; textStyle.color: Color.White; textStyle.base: SystemDefaults.TextStyles.PrimaryText }
+                            }
+                            Container {
+                                layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
+                                leftPadding: ui.du(2); rightPadding: ui.du(2)
+                                topPadding: ui.du(1); bottomPadding: ui.du(1)
+                                onTouch: {
+                                    if (!event.isUp()) return;
+                                    attachMenuVisible = false;
+                                    videoPicker.open();
+                                }
+                                EmojiIcon { emoji: "🎬"; iconSize: ui.du(3); rightMargin: ui.du(1.5); verticalAlignment: VerticalAlignment.Center }
+                                Label { text: "Video"; verticalAlignment: VerticalAlignment.Center; textStyle.color: Color.White; textStyle.base: SystemDefaults.TextStyles.PrimaryText }
+                            }
+                            Container {
+                                layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
+                                leftPadding: ui.du(2); rightPadding: ui.du(2)
+                                topPadding: ui.du(1); bottomPadding: ui.du(1)
+                                onTouch: {
+                                    if (!event.isUp()) return;
+                                    attachMenuVisible = false;
+                                    audioPicker.open();
+                                }
+                                EmojiIcon { emoji: "🎵"; iconSize: ui.du(3); rightMargin: ui.du(1.5); verticalAlignment: VerticalAlignment.Center }
+                                Label { text: "Audio"; verticalAlignment: VerticalAlignment.Center; textStyle.color: Color.White; textStyle.base: SystemDefaults.TextStyles.PrimaryText }
+                            }
+                            Container {
+                                layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
+                                leftPadding: ui.du(2); rightPadding: ui.du(2)
+                                topPadding: ui.du(1); bottomPadding: ui.du(1)
+                                onTouch: {
+                                    if (!event.isUp()) return;
+                                    attachMenuVisible = false;
+                                    filePicker.open();
+                                }
+                                EmojiIcon { emoji: "📄"; iconSize: ui.du(3); rightMargin: ui.du(1.5); verticalAlignment: VerticalAlignment.Center }
+                                Label { text: "File"; verticalAlignment: VerticalAlignment.Center; textStyle.color: Color.White; textStyle.base: SystemDefaults.TextStyles.PrimaryText }
+                            }
+                        }
+                    }
                 }
 
                 attachedObjects: [
@@ -860,6 +966,39 @@ NavigationPane {
                         onFileSelected: {
                             if (selectedFiles.length > 0) {
                                 messageListModel.sendImage(selectedFiles[0]);
+                            }
+                        }
+                    },
+                    FilePicker {
+                        id: videoPicker
+                        type: FileType.Video
+                        title: "Choose a video"
+                        mode: FilePickerMode.Picker
+                        onFileSelected: {
+                            if (selectedFiles.length > 0) {
+                                messageListModel.sendVideo(selectedFiles[0]);
+                            }
+                        }
+                    },
+                    FilePicker {
+                        id: audioPicker
+                        type: FileType.Music
+                        title: "Choose an audio file"
+                        mode: FilePickerMode.Picker
+                        onFileSelected: {
+                            if (selectedFiles.length > 0) {
+                                messageListModel.sendAudioFile(selectedFiles[0]);
+                            }
+                        }
+                    },
+                    FilePicker {
+                        id: filePicker
+                        type: FileType.Document | FileType.Other
+                        title: "Choose a file"
+                        mode: FilePickerMode.Picker
+                        onFileSelected: {
+                            if (selectedFiles.length > 0) {
+                                messageListModel.sendFile(selectedFiles[0]);
                             }
                         }
                     },
@@ -902,15 +1041,39 @@ NavigationPane {
                 Container {
                     horizontalAlignment: HorizontalAlignment.Fill
                     verticalAlignment: VerticalAlignment.Fill
-                    background: Color.create("#1a2026")
+                    // TitleBar has no "visible" property and TitleBarKind has
+                    // no "None" value in this Cascades version (checked the
+                    // BBNDK headers directly, same as the Button.background/
+                    // ActionItem.visible traps) -- there's no clean way to
+                    // remove the bar outright for the logged-out state. This
+                    // fakes it instead: match the page's own background
+                    // (#101316, not this bar's usual #1a2026) and collapse
+                    // the content to zero height, so it reads as "no bar"
+                    // rather than an empty strip in a different shade. The
+                    // login screen shows its own (larger) logo directly in
+                    // its content, making this bar's copy redundant there.
+                    background: matrixApi.loggedIn ? Color.create("#1a2026") : Color.create("#101316")
+                    preferredHeight: matrixApi.loggedIn ? ui.du(8) : 0
                     layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
                     leftPadding: ui.du(2); rightPadding: ui.du(1)
                     ImageView {
+                        // In a LeftToRight StackLayout, horizontalAlignment
+                        // controls the CROSS axis (vertical here), not
+                        // position along the stack -- giving this element
+                        // spaceQuota:1 (to "expand and align left" within
+                        // that space) actually stretched it to fill the row
+                        // instead. A trailing spacer with the spaceQuota
+                        // does the actual push-right-content-to-the-right
+                        // job, leaving this at its own natural size flush
+                        // left.
+                        visible: matrixApi.loggedIn
                         imageSource: "asset:///bbport_logo.png"
                         scalingMethod: ScalingMethod.AspectFit
-                        preferredHeight: ui.du(4.5)
-                        horizontalAlignment: HorizontalAlignment.Left
+                        preferredHeight: ui.du(6)
                         verticalAlignment: VerticalAlignment.Center
+                    }
+                    Container {
+                        visible: matrixApi.loggedIn
                         layoutProperties: StackLayoutProperties { spaceQuota: 1 }
                     }
                     ImageButton {
@@ -954,7 +1117,7 @@ NavigationPane {
                 ImageView {
                     imageSource: "asset:///bbport_logo.png"
                     scalingMethod: ScalingMethod.AspectFit
-                    preferredHeight: ui.du(8)
+                    preferredHeight: ui.du(16)
                     horizontalAlignment: HorizontalAlignment.Center
                     bottomMargin: ui.du(3)
                 }

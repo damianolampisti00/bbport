@@ -25,6 +25,9 @@ extern "C" {
 #include <QTextStream>
 #include <cstdlib>
 
+#include <bb/system/InvokeManager>
+#include <bb/system/InvokeRequest>
+
 using namespace bb::data;
 
 // Video transcoding and Instagram Reel extraction used to be delegated to a
@@ -81,6 +84,7 @@ static QByteArray olmBase64Decode(QByteArray input, bool urlSafe = false)
 MediaManager::MediaManager(MatrixApi *api, QObject *parent) :
         QObject(parent),
         m_api(api),
+        m_invokeManager(new bb::system::InvokeManager(this)),
         m_recordingCounter(0)
 {
     m_cacheDir = QDir::homePath() + "/matrix_media";
@@ -433,6 +437,20 @@ void MediaManager::finishYoutubeDlJob(QProcess *proc, bool succeeded)
     emit instagramVideoReady(instagramUrl, "file://" + cachePath);
 }
 
+void MediaManager::openVideoExternally(const QString &localFileUrl)
+{
+    if (localFileUrl.isEmpty()) return;
+    // No setTarget() call -- an unbound invoke lets the system resolve the
+    // best-registered handler for this action/mimeType (the built-in Videos
+    // app), the same "open with the default app" behavior as tapping a
+    // video attachment in the system email/BBM apps.
+    bb::system::InvokeRequest request;
+    request.setAction("bb.action.VIEW");
+    request.setMimeType("video/mp4");
+    request.setUri(QUrl(localFileUrl));
+    m_invokeManager->invoke(request);
+}
+
 QString MediaManager::resolveThumbnail(const QString &mxcUri, int width, int height)
 {
     if (mxcUri.isEmpty()) return QString();
@@ -521,7 +539,71 @@ QString MediaManager::mimeTypeForFile(const QString &path) const
     if (ext == "amr") return "audio/amr";
     if (ext == "mp3") return "audio/mpeg";
     if (ext == "m4a") return "audio/mp4";
+    if (ext == "ogg" || ext == "opus") return "audio/ogg";
+    if (ext == "pdf") return "application/pdf";
+    if (ext == "doc") return "application/msword";
+    if (ext == "docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    if (ext == "xls") return "application/vnd.ms-excel";
+    if (ext == "xlsx") return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    if (ext == "txt") return "text/plain";
+    if (ext == "zip") return "application/zip";
     return "application/octet-stream";
+}
+
+void MediaManager::uploadAudioAsOgg(const QString &localFilePath)
+{
+    if (localFilePath.isEmpty()) return;
+
+    QString outPath = localFilePath + ".ogg";
+    QFile::remove(outPath);
+
+    QStringList args;
+    args << "-y" << "-i" << localFilePath
+         << "-c:a" << "libopus" << "-b:a" << "32k" << "-vbr" << "on" << "-application" << "voip"
+         << outPath;
+
+    AudioUploadJob job;
+    job.originalPath = localFilePath;
+    job.outPath = outPath;
+
+    QProcess *proc = new QProcess(this);
+    proc->setProcessEnvironment(berryCoreEnvironment());
+    m_audioUploadJobs[proc] = job;
+    connect(proc, SIGNAL(finished(int,QProcess::ExitStatus)), this, SLOT(onAudioTranscodeFinished(int,QProcess::ExitStatus)));
+    connect(proc, SIGNAL(error(QProcess::ProcessError)), this, SLOT(onAudioTranscodeError(QProcess::ProcessError)));
+    proc->start(QString::fromLatin1(kBerryCoreFfmpeg), args);
+}
+
+void MediaManager::onAudioTranscodeFinished(int exitCode, QProcess::ExitStatus exitStatus)
+{
+    QProcess *proc = qobject_cast<QProcess*>(sender());
+    if (!proc || !m_audioUploadJobs.contains(proc)) return;
+    finishAudioTranscodeJob(proc, exitStatus == QProcess::NormalExit && exitCode == 0);
+}
+
+void MediaManager::onAudioTranscodeError(QProcess::ProcessError error)
+{
+    Q_UNUSED(error);
+    QProcess *proc = qobject_cast<QProcess*>(sender());
+    if (!proc || !m_audioUploadJobs.contains(proc)) return;
+    finishAudioTranscodeJob(proc, false);
+}
+
+// Falls back to uploading the original (untranscoded) recording on any
+// ffmpeg failure -- same "never block the send outright" philosophy as
+// finishFfmpegJob() for incoming video. The recipient still gets a playable
+// file, just as plain audio/mp4 (no inline voice-bubble rendering) instead
+// of a proper Ogg/Opus voice message.
+void MediaManager::finishAudioTranscodeJob(QProcess *proc, bool succeeded)
+{
+    AudioUploadJob job = m_audioUploadJobs.take(proc);
+    proc->deleteLater();
+
+    bool haveOgg = succeeded && QFile::exists(job.outPath);
+    QString uploadPath = haveOgg ? job.outPath : job.originalPath;
+    if (haveOgg) m_uploadPathRemap[uploadPath] = job.originalPath;
+    else QFile::remove(job.outPath);
+    upload(uploadPath);
 }
 
 void MediaManager::upload(const QString &localFilePath)
@@ -558,6 +640,18 @@ void MediaManager::onUploadFinished()
 
     QVariantMap map = parsed.toMap();
     QString mxcUri = map.value("content_uri").toString();
+
+    // uploadAudioAsOgg() uploads a throwaway "<original>.ogg" temp file, not
+    // the path the caller actually asked to send -- report the original
+    // path instead (so MessageListModel's m_pendingUploads lookup, keyed by
+    // what it originally called sendAudio() with, still matches) and clean
+    // the temp file up now that it has served its purpose either way.
+    QString remapOriginal = m_uploadPathRemap.take(localFilePath);
+    if (!remapOriginal.isEmpty()) {
+        QFile::remove(localFilePath);
+        localFilePath = remapOriginal;
+    }
+
     if (!ok || mxcUri.isEmpty()) {
         emit uploadFinished(localFilePath, QString(), mimeType, false);
         return;

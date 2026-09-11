@@ -8,6 +8,8 @@
 #include <QVariantMap>
 #include <QProcess>
 
+namespace bb { namespace system { class InvokeManager; } }
+
 class MatrixApi;
 class QNetworkReply;
 
@@ -63,6 +65,28 @@ public:
     // actually a video/Reel).
     Q_INVOKABLE QString fetchInstagramVideo(const QString &instagramUrl);
 
+    // Transcodes localFilePath (the AudioRecorder's own m4a/AAC output) to
+    // Ogg/Opus via ffmpeg, then uploads the result -- but the uploadFinished
+    // signal still reports localFilePath itself (not the throwaway .ogg
+    // temp file), so callers can key off the exact path they asked to send.
+    // Falls back to uploading localFilePath as-is if the transcode fails.
+    // Ogg/Opus (rather than the m4a/AAC MediaManager would otherwise upload
+    // unchanged) is what lets other Matrix clients render this as an inline
+    // voice-message bubble instead of a generic "sent an audio file" link --
+    // see MessageListModel::onUploadFinished()'s
+    // "org.matrix.msc3245.voice_message" annotation, which is only added
+    // when this actually produced audio/ogg.
+    Q_INVOKABLE void uploadAudioAsOgg(const QString &localFilePath);
+
+    // Trial alternative to the in-app videoViewerPage (NativeVideoPlayer +
+    // mm-renderer): hands localFileUrl to BB10's Invocation Framework with
+    // no target specified, so the system picks the default video card (the
+    // native Videos app) to play it instead of rendering inside Beport.
+    // Kept alongside the in-app player rather than replacing it, so main.qml
+    // can be pointed back at navigationPane.openVideo() with a one-line
+    // revert if this doesn't work out.
+    Q_INVOKABLE void openVideoExternally(const QString &localFileUrl);
+
     // Appends a timestamped line to
     // /accounts/1000/shared/misc/beport_debug.log. Exists because there's
     // no way to see qDebug()/console.log() output from a real device
@@ -89,6 +113,8 @@ private slots:
     void onFfmpegError(QProcess::ProcessError error);
     void onYoutubeDlFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void onYoutubeDlError(QProcess::ProcessError error);
+    void onAudioTranscodeFinished(int exitCode, QProcess::ExitStatus exitStatus);
+    void onAudioTranscodeError(QProcess::ProcessError error);
 
 private:
     struct CryptoInfo {
@@ -108,10 +134,16 @@ private:
     static bool decryptFile(const QByteArray &ciphertext, const CryptoInfo &info, QByteArray *plaintextOut);
     void finishFfmpegJob(QProcess *proc, bool succeeded);
     void finishYoutubeDlJob(QProcess *proc, bool succeeded);
+    void finishAudioTranscodeJob(QProcess *proc, bool succeeded);
 
     struct FfmpegJob {
         QString mxcUri;
         QString inPath;
+        QString outPath;
+    };
+
+    struct AudioUploadJob {
+        QString originalPath;
         QString outPath;
     };
 
@@ -129,6 +161,9 @@ private:
     QHash<QNetworkReply*, QString> m_thumbCachePath; // reply -> its cache path
     QHash<QProcess*, QString> m_ytdlTarget; // process -> instagramUrl
     QHash<QProcess*, QString> m_ytdlOutTemplate; // process -> youtube-dl -o template (to locate the actual output file)
+    QHash<QProcess*, AudioUploadJob> m_audioUploadJobs;
+    QHash<QString, QString> m_uploadPathRemap; // transcoded temp path -> original path, consumed in onUploadFinished
+    bb::system::InvokeManager *m_invokeManager;
     int m_recordingCounter;
 };
 

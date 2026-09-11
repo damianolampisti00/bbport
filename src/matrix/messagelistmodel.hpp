@@ -192,6 +192,14 @@ public:
 public slots:
     void sendText(const QString &body);
     void sendImage(const QString &localFilePath);
+    void sendVideo(const QString &localFilePath);
+    void sendFile(const QString &localFilePath);
+    // For an audio file picked from storage (attach menu's "Audio") rather
+    // than a mic recording -- uploaded as-is, unlike sendAudio() below,
+    // since forcing an arbitrary existing audio file (e.g. a song) through
+    // the voice-message Ogg/Opus transcode would both degrade its quality
+    // and mislabel it as a voice message in other clients.
+    void sendAudioFile(const QString &localFilePath);
     // durationMs is the recording length reported by AudioRecorder (0 if
     // unknown); sent as content.info.duration, per the m.audio msgtype.
     void sendAudio(const QString &localFilePath, int durationMs);

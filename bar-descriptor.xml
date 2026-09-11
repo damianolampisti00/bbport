@@ -56,7 +56,7 @@
 
     <!-- Fourth digit segment of the package version. First three segments are taken from the
          <versionNumber> element.  Must be an integer from 0 to 2^16-1 -->
-    <buildId>2</buildId>
+    <buildId>9</buildId>
 
     <!-- A string value (such as "v1", "2.5", or "Alpha 1") that represents the version of the application, as it should be shown to users. Optional. -->
     <!-- <versionLabel></versionLabel> -->
@@ -97,6 +97,21 @@
     <asset path="translations" dest="qm">
         <include name="*.qm"/>
     </asset>
+
+    <!-- Lets NotificationManager's InvokeRequest (attached to every
+         incoming-message Notification, see notificationmanager.cpp)
+         actually resolve to a target: without a matching invoke-target
+         declaration here, InvokeRequest::setTarget()'s id has nothing
+         registered to route to, and tapping the notification does nothing
+         instead of foregrounding the app on that room. id must match
+         kAppInvokeTarget in notificationmanager.cpp exactly. -->
+    <invoke-target id="it.beport.client.notification" system="false">
+        <type>APPLICATION</type>
+        <filter>
+            <action>bb.action.OPEN</action>
+            <mime-type>application/x-beport-room</mime-type>
+        </filter>
+    </invoke-target>
 
     <!-- Request permission to execute native code.  Required for native applications. -->
     <permission system="true">run_native</permission>
