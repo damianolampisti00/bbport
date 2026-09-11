@@ -1196,6 +1196,14 @@ void OlmCryptoManager::sendVerificationRequest()
 
 void OlmCryptoManager::sendVerificationStart()
 {
+    // onVerificationKeysQueryReplyFinished() is a shared completion slot for
+    // more than one /keys/query request that can end up calling this (or
+    // sendVerificationAccept()) based on m_verification's *current* state
+    // rather than which request actually completed -- an incoming .request
+    // arriving while our own startVerification() query was still in flight
+    // can leave a still-live m_verification.sas from an earlier attempt.
+    // Free it first instead of silently leaking it.
+    freeVerificationSas();
     void *mem = std::malloc(olm_sas_size());
     OlmSAS *sas = olm_sas(mem);
     size_t randLen = olm_create_sas_random_length(sas);
@@ -1232,6 +1240,10 @@ void OlmCryptoManager::sendVerificationStart()
 
 void OlmCryptoManager::sendVerificationAccept()
 {
+    // See the same call in sendVerificationStart() -- avoids leaking a
+    // still-live OlmSAS from an earlier attempt via the shared
+    // onVerificationKeysQueryReplyFinished() completion slot.
+    freeVerificationSas();
     void *mem = std::malloc(olm_sas_size());
     OlmSAS *sas = olm_sas(mem);
     size_t randLen = olm_create_sas_random_length(sas);
@@ -1544,6 +1556,18 @@ void OlmCryptoManager::handleVerificationEvent(const QVariantMap &event)
         m_verification.theirPubkey = theirKey;
 
         OlmSAS *sas = static_cast<OlmSAS*>(m_verification.sas);
+        if (!sas) {
+            // m_verification.sas is only allocated once sendVerificationStart()/
+            // sendVerificationAccept() actually runs, and the accepter path can
+            // go async first (ensureTheirKeysThenAccept()'s /keys/query
+            // round-trip) before that happens. To-device delivery order isn't
+            // guaranteed, so a .key for this same transaction can arrive in
+            // that window -- olm_sas_set_their_key(0, ...) below would
+            // otherwise crash inside libolm. Same guard the .mac handler
+            // already has further down.
+            sendVerificationCancel("Unexpected verification state.", "m.unexpected_message");
+            return;
+        }
         QByteArray theirKeyBuf = theirKey.toUtf8();
         size_t res = olm_sas_set_their_key(sas, theirKeyBuf.data(), theirKeyBuf.size());
         if (res == olm_error()) {

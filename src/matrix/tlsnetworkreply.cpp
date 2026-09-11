@@ -4,6 +4,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <sys/socket.h>
 
 #include <QMutexLocker>
 #include <QMetaObject>
@@ -138,7 +139,26 @@ void TlsRequestThread::requestAbort()
 {
     QMutexLocker locker(&m_netMutex);
     m_aborted = true;
-    mbedtls_net_free(&m_netCtx);
+    // shutdown(), not mbedtls_net_free(): this can run on another thread
+    // concurrently with run() blocked inside mbedtls_ssl_handshake/read/
+    // write, which invoke mbedTLS's own net_recv/net_send callbacks
+    // directly on m_netCtx.fd -- those aren't guarded by m_netMutex (mbedTLS
+    // has no notion of it), so freeing/closing the fd here raced whatever
+    // blocking syscall was in flight on it. Worse, since several
+    // TlsRequestThreads run concurrently (the /sync long-poll plus any API
+    // call or media fetch), the instant close() releases this fd number the
+    // kernel is free to hand it to a brand-new socket() from a *different*,
+    // still-running request thread -- the aborted thread's still-blocked
+    // read could then silently consume bytes belonging to that unrelated
+    // connection. shutdown() interrupts the blocked call immediately
+    // (it returns an error/EOF) without releasing the fd number itself; the
+    // actual close happens later, once run() has genuinely returned, via
+    // mbedtls_net_free() in the destructor -- safe by then since
+    // TlsNetworkReply always wait()s for this thread to finish before it
+    // can be destroyed.
+    if (m_netCtx.fd >= 0) {
+        shutdown(m_netCtx.fd, SHUT_RDWR);
+    }
 }
 
 bool TlsRequestThread::wasAborted()

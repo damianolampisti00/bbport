@@ -334,8 +334,18 @@ void SyncEngine::onSyncReplyFinished()
         emit toDeviceEvent(toDeviceEvents.at(i).toMap());
     }
 
-    processRoomsObject(root.value("rooms").toMap());
-    saveRoomCache();
+    QVariantMap roomsObj = root.value("rooms").toMap();
+    processRoomsObject(roomsObj);
+    // A routine idle long-poll (the common case: nothing happened for
+    // ~30s) comes back with an empty "rooms" object -- saveRoomCache() used
+    // to run unconditionally here regardless, meaning a full JSON
+    // serialize + disk write of every room's metadata happened roughly
+    // every 30 seconds for the entire time the app sits idle, forever.
+    // Skipping it when nothing could have changed matches what the
+    // function's own doc comment already claimed ("called after every
+    // successful sync that changed anything") but the code didn't actually
+    // implement.
+    if (!roomsObj.isEmpty()) saveRoomCache();
 
     if (!m_initialSyncDone) {
         m_initialSyncDone = true;

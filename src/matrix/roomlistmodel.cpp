@@ -10,8 +10,21 @@
 #include <QFile>
 #include <QTextStream>
 #include <QTimer>
+#include <QtAlgorithms>
 
 using namespace bb::cascades;
+
+// Invites first, then by lastTs descending -- same rule the old manual
+// insertion sort implemented, just O(n log n) via qStableSort instead of
+// O(n^2). Stable (ties keep m_allRooms's own relative order), matching the
+// old insertion sort's behavior.
+static bool roomLessThan(const QVariantMap &a, const QVariantMap &b)
+{
+    bool aInvite = a.value("isInvite").toBool();
+    bool bInvite = b.value("isInvite").toBool();
+    if (aInvite != bInvite) return aInvite;
+    return a.value("lastTs").toLongLong() > b.value("lastTs").toLongLong();
+}
 
 RoomListModel::RoomListModel(MatrixApi *api, MediaManager *media, QObject *parent) :
         QObject(parent),
@@ -19,7 +32,8 @@ RoomListModel::RoomListModel(MatrixApi *api, MediaManager *media, QObject *paren
         m_media(media),
         m_model(new ArrayDataModel(this)),
         m_totalUnreadCount(0),
-        m_searchDebounce(new QTimer(this))
+        m_searchDebounce(new QTimer(this)),
+        m_rebuildDebounce(new QTimer(this))
 {
     connect(m_media, SIGNAL(thumbnailReady(QString,QString)), this, SLOT(onThumbnailReady(QString,QString)));
     m_hiddenRoomsFilePath = QDir::homePath() + "/hidden_rooms.txt";
@@ -27,6 +41,9 @@ RoomListModel::RoomListModel(MatrixApi *api, MediaManager *media, QObject *paren
 
     m_searchDebounce->setSingleShot(true);
     connect(m_searchDebounce, SIGNAL(timeout()), this, SLOT(rebuildVisible()));
+
+    m_rebuildDebounce->setSingleShot(true);
+    connect(m_rebuildDebounce, SIGNAL(timeout()), this, SLOT(rebuildVisible()));
 }
 
 RoomListModel::~RoomListModel()
@@ -173,25 +190,7 @@ void RoomListModel::rebuildVisible()
         items << item;
     }
 
-    for (int i = 1; i < items.size(); ++i) {
-        QVariantMap key = items.at(i);
-        int j = i - 1;
-        while (j >= 0) {
-            const QVariantMap &other = items.at(j);
-            bool keyIsInvite = key.value("isInvite").toBool();
-            bool otherIsInvite = other.value("isInvite").toBool();
-            bool shouldMoveUp;
-            if (keyIsInvite != otherIsInvite) {
-                shouldMoveUp = keyIsInvite;
-            } else {
-                shouldMoveUp = key.value("lastTs").toLongLong() > other.value("lastTs").toLongLong();
-            }
-            if (!shouldMoveUp) break;
-            items[j + 1] = items[j];
-            j--;
-        }
-        items[j + 1] = key;
-    }
+    qStableSort(items.begin(), items.end(), roomLessThan);
 
     m_model->clear();
     m_indexByRoomId.clear();
@@ -233,7 +232,7 @@ void RoomListModel::upsertRoom(const QString &roomId, const QVariantMap &summary
         m_allRooms << item;
     }
     recomputeTotalUnreadCount();
-    rebuildVisible();
+    m_rebuildDebounce->start(0);
 }
 
 void RoomListModel::setTyping(const QString &roomId, const QStringList &userIds)
@@ -269,7 +268,7 @@ void RoomListModel::addInvite(const QString &roomId, const QString &inviterId, c
     m_allIndexByRoomId[roomId] = m_allRooms.size();
     m_allRooms << item;
     recomputeTotalUnreadCount();
-    rebuildVisible();
+    m_rebuildDebounce->start(0);
 }
 
 void RoomListModel::removeRoom(const QString &roomId)
@@ -282,7 +281,7 @@ void RoomListModel::removeRoom(const QString &roomId)
         m_allIndexByRoomId[m_allRooms.at(i).value("roomId").toString()] = i;
     }
     recomputeTotalUnreadCount();
-    rebuildVisible();
+    m_rebuildDebounce->start(0);
 }
 
 void RoomListModel::acceptInvite(const QString &roomId)

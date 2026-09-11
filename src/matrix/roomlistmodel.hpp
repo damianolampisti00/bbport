@@ -111,6 +111,22 @@ private:
     QString m_hiddenRoomsFilePath;
     int m_totalUnreadCount;
     QTimer *m_searchDebounce;
+    // Coalesces rebuildVisible() calls from upsertRoom()/addInvite()/
+    // removeRoom() -- a single initial /sync response walks every
+    // joined room in a tight synchronous loop (SyncEngine::
+    // processRoomsObject()), each iteration emitting roomUpdated() straight
+    // into upsertRoom(). Without this, a 200-room Beeper account (very
+    // real with WhatsApp/iMessage/etc bridges) reran the full O(n) sort +
+    // ArrayDataModel clear/rebuild 200 times in a row, entirely on the main
+    // thread -- easily seconds of UI-thread blocking, which is both the
+    // "fatica a caricare le chat" symptom and, if long enough, something
+    // the platform could treat as a hung app. A zero-interval singleShot
+    // timer re-armed by every call in the same burst only actually fires
+    // once the burst's synchronous call stack unwinds back to the event
+    // loop, collapsing N rebuilds into 1. hideRoom()/unhideRoom() skip this
+    // and rebuild immediately instead -- those are single explicit taps,
+    // not a burst, and immediate feedback reads better there.
+    QTimer *m_rebuildDebounce;
     QString m_pendingOpenRoomId;
 };
 
