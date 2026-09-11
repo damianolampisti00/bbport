@@ -955,6 +955,11 @@ NavigationPane {
                             }
                         }
                     }
+
+                    // So an incoming (or in-progress) device verification is
+                    // reachable from inside a conversation too, not just the
+                    // inbox -- see VerificationOverlay.qml.
+                    VerificationOverlay {}
                 }
 
                 attachedObjects: [
@@ -1223,76 +1228,15 @@ NavigationPane {
                                 onClicked: navigationPane.verifyBannerDismissed = true
                             }
                         }
-                        Label {
-                            text: olmCryptoManager.verificationStatus
-                            visible: text.length > 0
-                            multiline: true
-                            topMargin: ui.du(1)
-                            textStyle.base: SystemDefaults.TextStyles.SmallText
-                            textStyle.color: Color.create("#9ab8da")
-                        }
-                        Button {
-                            text: "Cancel verification"
-                            appearance: ControlAppearance.Plain
-                            color: Color.create("#e05c5c")
-                            visible: olmCryptoManager.verificationActive && !olmCryptoManager.verificationIncomingPending && !olmCryptoManager.verificationAwaitingConfirm
-                            topMargin: ui.du(1)
-                            onClicked: olmCryptoManager.cancelVerification()
-                        }
-                        Container {
-                            visible: olmCryptoManager.verificationIncomingPending
-                            layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
-                            topMargin: ui.du(1)
-                            Button {
-                                text: "Accept request"
-                                appearance: ControlAppearance.Plain
-                                color: Color.create("#2f5eff")
-                                layoutProperties: StackLayoutProperties { spaceQuota: 1 }
-                                onClicked: olmCryptoManager.acceptIncomingVerification()
-                            }
-                            Button {
-                                text: "Decline"
-                                appearance: ControlAppearance.Plain
-                                color: Color.create("#e05c5c")
-                                layoutProperties: StackLayoutProperties { spaceQuota: 1 }
-                                onClicked: olmCryptoManager.cancelVerification()
-                            }
-                        }
-                        Label {
-                            text: olmCryptoManager.verificationSas
-                            visible: olmCryptoManager.verificationAwaitingConfirm
-                            horizontalAlignment: HorizontalAlignment.Center
-                            topMargin: ui.du(1)
-                            textStyle.base: SystemDefaults.TextStyles.TitleText
-                            textStyle.color: Color.White
-                        }
-                        Label {
-                            text: olmCryptoManager.verificationEmoji
-                            visible: olmCryptoManager.verificationAwaitingConfirm
-                            multiline: true
-                            horizontalAlignment: HorizontalAlignment.Center
-                            topMargin: ui.du(1)
-                            textStyle.color: Color.White
-                        }
-                        Container {
-                            visible: olmCryptoManager.verificationAwaitingConfirm
-                            layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
-                            topMargin: ui.du(1)
-                            Button {
-                                text: "They match"
-                                appearance: ControlAppearance.Plain
-                                color: Color.create("#2f5eff")
-                                layoutProperties: StackLayoutProperties { spaceQuota: 1 }
-                                onClicked: olmCryptoManager.confirmVerification()
-                            }
-                            Button {
-                                text: "They don't match"
-                                appearance: ControlAppearance.Plain
-                                color: Color.create("#e05c5c")
-                                layoutProperties: StackLayoutProperties { spaceQuota: 1 }
-                                onClicked: olmCryptoManager.cancelVerification()
-                            }
-                        }
+                        // Everything past this point once an attempt is
+                        // actually active (status/cancel/incoming
+                        // accept-decline/SAS compare) now lives in
+                        // VerificationOverlay.qml instead -- nested here it
+                        // was unreachable the moment this dismissible
+                        // banner was dismissed (or a conversation page was
+                        // pushed on top), including an INCOMING request
+                        // from someone else, which isn't something the
+                        // user chose to hide.
                     }
 
                     TextField {
@@ -1459,6 +1403,8 @@ NavigationPane {
                         textStyle.color: Color.create("#8492a2")
                     }
                 }
+
+                VerificationOverlay {}
             }
         }
     }
