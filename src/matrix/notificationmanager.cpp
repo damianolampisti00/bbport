@@ -1,0 +1,87 @@
+#include "notificationmanager.hpp"
+#include "matrixapi.hpp"
+#include "messagelistmodel.hpp"
+#include "roomlistmodel.hpp"
+#include "syncengine.hpp"
+
+#include <bb/platform/Notification>
+#include <bb/platform/NotificationDefaultApplicationSettings>
+#include <bb/platform/NotificationPriorityPolicy>
+#include <bb/platform/NotificationSettingsError>
+#include <bb/system/InvokeRequest>
+
+// Must match bar-descriptor.xml's <id> -- InvokeRequest::setTarget() expects
+// "the identity of the receiver as stated in its BAR manifest", and since
+// we're both the sender (attaching this to our own Notification) and the
+// intended receiver (ApplicationUI's InvokeManager), that's simply our own
+// app id. No separate <invoke-target> BAR declaration is needed for this:
+// that mechanism is for being discovered/invoked by OTHER apps, which isn't
+// the case here.
+static const char *const kAppInvokeTarget = "it.beport.client";
+
+NotificationManager::NotificationManager(MatrixApi *api, MessageListModel *messageListModel, RoomListModel *roomListModel, SyncEngine *syncEngine, QObject *parent) :
+        QObject(parent),
+        m_api(api),
+        m_messageListModel(messageListModel),
+        m_roomListModel(roomListModel),
+        m_syncEngine(syncEngine)
+{
+    // Instant Preview (the top-of-screen popup banner, like the system Hub
+    // apps show) is NotApplicable -- silently disabled, with the per-app
+    // toggle hidden from Settings entirely -- for any app by default unless
+    // it has a BlackBerry Hub account. There's no Hub account integration
+    // here, but NotificationDefaultApplicationSettings::setPreview() can
+    // still explicitly opt this app's notifications into Allow. Per the
+    // apply() docs this only takes effect the *first* time it's ever called
+    // for the app (a no-op, returning None, on every later call once it's
+    // taken effect or the user has since changed it themselves in
+    // Settings), so it's safe to call unconditionally on every startup.
+    bb::platform::NotificationDefaultApplicationSettings settings;
+    settings.setPreview(bb::platform::NotificationPriorityPolicy::Allow);
+    settings.apply();
+}
+
+void NotificationManager::onTimelineEvent(const QString &roomId, const QVariantMap &event)
+{
+    if (m_syncEngine && !m_syncEngine->isInitialSyncDone()) return;
+    if (event.value("isOutgoing").toBool()) return;
+    if (roomId == m_messageListModel->roomId()) return; // already viewing this room
+
+    QString msgtype = event.value("msgtype").toString();
+    QString body = event.value("body").toString();
+    QString preview;
+    if (msgtype == "m.image") preview = QString::fromUtf8("\xf0\x9f\x93\xb7 Photo");
+    else if (msgtype == "m.video") preview = QString::fromUtf8("\xf0\x9f\x8e\xac Video");
+    else if (msgtype == "m.audio") preview = QString::fromUtf8("\xf0\x9f\x8e\xb5 Voice message");
+    else if (msgtype == "m.file") preview = QString::fromUtf8("\xf0\x9f\x93\x84 File");
+    else if (msgtype == "m.sticker") preview = QString::fromUtf8("Sticker");
+    else preview = body;
+    if (preview.isEmpty()) return;
+
+    QString senderName = event.value("senderName").toString();
+    if (senderName.isEmpty()) senderName = event.value("sender").toString();
+
+    int roomIdx = m_roomListModel->indexOfRoom(roomId);
+    QString roomName = roomIdx >= 0 ? m_roomListModel->roomAt(roomIdx).value("name").toString() : QString();
+
+    QString title = (!roomName.isEmpty() && roomName != senderName)
+            ? QString("%1 (%2)").arg(senderName, roomName)
+            : senderName;
+
+    // Tapping the notification re-invokes this same app (see
+    // ApplicationUI's InvokeManager::invoked() handler) carrying roomId as
+    // the payload, so it can jump straight to that conversation instead of
+    // just opening to whatever screen was last showing.
+    bb::system::InvokeRequest invokeRequest;
+    invokeRequest.setTarget(kAppInvokeTarget);
+    invokeRequest.setAction("bb.action.OPEN");
+    invokeRequest.setMimeType("application/x-beport-room");
+    invokeRequest.setData(roomId.toUtf8());
+
+    bb::platform::Notification *notification = new bb::platform::Notification(this);
+    notification->setTitle(title);
+    notification->setBody(preview);
+    notification->setInvokeRequest(invokeRequest);
+    notification->notify();
+    notification->deleteLater();
+}

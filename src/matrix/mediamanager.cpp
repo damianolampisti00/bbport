@@ -1,0 +1,566 @@
+#include "mediamanager.hpp"
+#include "matrixapi.hpp"
+#include "oggopusdecoder.hpp"
+
+#include <bb/data/JsonDataAccess>
+
+#include <olm/olm.h>
+#include <olm/crypto.h>
+#include <olm/base64.h>
+
+extern "C" {
+#include <crypto-algorithms/aes.h>
+}
+
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QProcess>
+#include <QProcessEnvironment>
+#include <QFile>
+#include <QFileInfo>
+#include <QDir>
+#include <QCryptographicHash>
+#include <QUrl>
+#include <QDateTime>
+#include <QTextStream>
+#include <cstdlib>
+
+using namespace bb::data;
+
+// Video transcoding and Instagram Reel extraction used to be delegated to a
+// dev-machine PC proxy (see tools/tls-bridge-proxy.py, now retired); both
+// features moved on-device using BerryCore's (github.com/sw7ft/BerryCore)
+// bundled ffmpeg/yt-dlp binaries instead, invoked directly via QProcess.
+// No PC involvement needed any more.
+static const char *kBerryCoreRoot = "/accounts/1000/shared/misc/berrycore";
+static const char *kBerryCoreFfmpeg = "/accounts/1000/shared/misc/berrycore/bin/ffmpeg";
+static const char *kBerryCorePython3 = "/accounts/1000/shared/misc/berrycore/bin/python3";
+
+// BerryCore's bundled youtube-dl binary (not this) hits an on-device-
+// confirmed bug: every HTTPS request fails with "tlsv1 alert protocol
+// version" (OpenSSL itself is a modern 3.3.2 -- confirmed via `python3 -c
+// "import ssl; print(ssl.OPENSSL_VERSION)"` -- so this is youtube-dl's own
+// long-unmaintained request code pinning an obsolete TLS version, not a
+// BerryCore/OpenSSL limitation). yt-dlp is the actively-maintained fork
+// that doesn't have that bug, already available via `pip install yt-dlp`
+// on this Python -- hence "python3 -m yt_dlp" rather than the youtube-dl
+// binary BerryCore ships.
+//
+// ffmpeg also needs BerryCore's LD_LIBRARY_PATH (built against its bundled
+// QNX target tree, not BBNDK's). Mirrors berrycore/env.sh exactly.
+static QProcessEnvironment berryCoreEnvironment()
+{
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    QString root = QString::fromLatin1(kBerryCoreRoot);
+    QString path = root + "/bin:" + root + "/sbin:" + env.value("PATH");
+    QString ldLibraryPath = root + "/target_10_3_1_995/qnx6/armle-v7/usr/lib:" + root + "/lib:" + env.value("LD_LIBRARY_PATH");
+    env.insert("PATH", path);
+    env.insert("LD_LIBRARY_PATH", ldLibraryPath);
+    return env;
+}
+
+// Matrix uses unpadded standard base64 almost everywhere, but the
+// EncryptedFile JWK key ("file".key.k) is unpadded base64URL (RFC 4648 §5:
+// '-'/'_' instead of '+'/'/') -- olm's own decoder expects the standard
+// alphabet, so translate before decoding. Same helper pattern as
+// KeyBackupManager's SSSS unwrap (kept separate since these are different
+// translation units and this one needs the url-safe variant too).
+static QByteArray olmBase64Decode(QByteArray input, bool urlSafe = false)
+{
+    if (urlSafe) {
+        input.replace('-', '+');
+        input.replace('_', '/');
+    }
+    size_t rawLen = _olm_decode_base64_length(input.size());
+    if (rawLen == (size_t)-1) return QByteArray();
+    QByteArray out(int(rawLen), '\0');
+    _olm_decode_base64((const uint8_t*)input.constData(), input.size(), (uint8_t*)out.data());
+    return out;
+}
+
+MediaManager::MediaManager(MatrixApi *api, QObject *parent) :
+        QObject(parent),
+        m_api(api),
+        m_recordingCounter(0)
+{
+    m_cacheDir = QDir::homePath() + "/matrix_media";
+    QDir().mkpath(m_cacheDir);
+}
+
+MediaManager::~MediaManager()
+{
+}
+
+bool MediaManager::splitMxc(const QString &mxcUri, QString *server, QString *mediaId)
+{
+    if (!mxcUri.startsWith("mxc://")) return false;
+    QString rest = mxcUri.mid(QString("mxc://").length());
+    int slashIdx = rest.indexOf('/');
+    if (slashIdx < 0) return false;
+    *server = rest.left(slashIdx);
+    *mediaId = rest.mid(slashIdx + 1);
+    return !server->isEmpty() && !mediaId->isEmpty();
+}
+
+QString MediaManager::cachePathFor(const QString &mxcUri) const
+{
+    QByteArray hash = QCryptographicHash::hash(mxcUri.toUtf8(), QCryptographicHash::Md5).toHex();
+    return m_cacheDir + "/" + QString::fromLatin1(hash);
+}
+
+QString MediaManager::cachePathForThumbnail(const QString &mxcUri, int width, int height) const
+{
+    QString key = QString("%1|thumb|%2x%3").arg(mxcUri).arg(width).arg(height);
+    QByteArray hash = QCryptographicHash::hash(key.toUtf8(), QCryptographicHash::Md5).toHex();
+    return m_cacheDir + "/" + QString::fromLatin1(hash);
+}
+
+QString MediaManager::resolve(const QString &mxcUri, const QString &key, const QString &iv, const QString &sha256, bool isVideo)
+{
+    if (mxcUri.isEmpty()) return QString();
+
+    QString cachePath = cachePathFor(mxcUri);
+    if (QFile::exists(cachePath)) {
+        return "file://" + cachePath;
+    }
+
+    if (m_inFlight.contains(mxcUri)) return QString();
+
+    QString server, mediaId;
+    if (!splitMxc(mxcUri, &server, &mediaId)) return QString();
+
+    if (!key.isEmpty()) {
+        CryptoInfo info;
+        info.key = key;
+        info.iv = iv;
+        info.sha256 = sha256;
+        m_cryptoInfo[mxcUri] = info;
+    }
+    if (isVideo) m_videoDownload.insert(mxcUri);
+
+    QString downloadPath = QString("/_matrix/media/r0/download/%1/%2").arg(server, mediaId);
+    QNetworkReply *reply = m_api->rawGet(downloadPath);
+    m_inFlight.insert(mxcUri);
+    m_downloadTarget[reply] = mxcUri;
+    connect(reply, SIGNAL(finished()), this, SLOT(onDownloadFinished()));
+    return QString();
+}
+
+bool MediaManager::decryptFile(const QByteArray &ciphertext, const CryptoInfo &info, QByteArray *plaintextOut)
+{
+    QByteArray aesKey = olmBase64Decode(info.key.toUtf8(), true /* url-safe */);
+    QByteArray ivBytes = olmBase64Decode(info.iv.toUtf8(), false);
+    if (aesKey.size() != 32 || ivBytes.size() != 16) return false;
+
+    if (!info.sha256.isEmpty()) {
+        void *utilMem = std::malloc(olm_utility_size());
+        OlmUtility *util = olm_utility(utilMem);
+        QByteArray computed(int(olm_sha256_length(util)), '\0');
+        olm_sha256(util, ciphertext.constData(), ciphertext.size(), computed.data(), computed.size());
+        olm_clear_utility(util);
+        std::free(utilMem);
+        if (QString::fromUtf8(computed) != info.sha256) return false;
+    }
+
+    WORD keySchedule[60];
+    aes_key_setup((const BYTE*)aesKey.constData(), keySchedule, 256);
+    plaintextOut->resize(ciphertext.size());
+    aes_decrypt_ctr((const BYTE*)ciphertext.constData(), ciphertext.size(),
+            (BYTE*)plaintextOut->data(), keySchedule, 256, (const BYTE*)ivBytes.constData());
+    return true;
+}
+
+void MediaManager::onDownloadFinished()
+{
+    QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
+    if (!reply) return;
+    QString mxcUri = m_downloadTarget.take(reply);
+    CryptoInfo crypto = m_cryptoInfo.take(mxcUri);
+    bool isVideo = m_videoDownload.remove(mxcUri);
+    // m_inFlight is deliberately NOT cleared here when isVideo -- it stays
+    // held until the transcode round-trip below also finishes, so a
+    // re-render mid-transcode (resolve() called again for the same mxcUri)
+    // doesn't kick off a duplicate download.
+
+    if (reply->error() != QNetworkReply::NoError) {
+        m_inFlight.remove(mxcUri);
+        reply->deleteLater();
+        emit mediaFailed(mxcUri);
+        return;
+    }
+
+    QByteArray data = reply->readAll();
+    reply->deleteLater();
+
+    if (!crypto.key.isEmpty()) {
+        QByteArray plaintext;
+        if (!decryptFile(data, crypto, &plaintext)) {
+            m_inFlight.remove(mxcUri);
+            emit mediaFailed(mxcUri);
+            return;
+        }
+        data = plaintext;
+    }
+
+    // Voice notes from bridged contacts (WhatsApp/Signal via Beeper) arrive
+    // as Ogg-Opus, which BB10's own MediaPlayer cannot play at all (no Opus
+    // codec support on this OS) -- caught here by content sniffing (the
+    // "OggS" magic), not by mimetype, since mimetype isn't threaded through
+    // to this method. Transcoded to a plain PCM WAV file that MediaPlayer
+    // can play; if decoding fails, the message is treated as a failed
+    // download rather than caching an unplayable file.
+    if (data.startsWith("OggS")) {
+        QByteArray wav;
+        if (!OggOpusDecoder::decodeToWav(data, &wav)) {
+            m_inFlight.remove(mxcUri);
+            emit mediaFailed(mxcUri);
+            return;
+        }
+        data = wav;
+    }
+
+    if (isVideo) {
+        // The Q5's hardware video decoder can't handle the resolution/
+        // profile most phones export by default (audio plays fine, video
+        // stays black -- a known BB10 platform limitation, not something
+        // fixable on-device). Re-encoded right here via BerryCore's ffmpeg
+        // into a profile the Q5 can actually decode.
+        QByteArray hash = QCryptographicHash::hash(mxcUri.toUtf8(), QCryptographicHash::Md5).toHex();
+        QString base = m_cacheDir + "/tmp_" + QString::fromLatin1(hash);
+        QString inPath = base + "_in";
+        QString outPath = base + "_out";
+        QFile::remove(outPath);
+
+        QFile inFile(inPath);
+        if (!inFile.open(QIODevice::WriteOnly)) {
+            m_inFlight.remove(mxcUri);
+            emit mediaFailed(mxcUri);
+            return;
+        }
+        inFile.write(data);
+        inFile.close();
+
+        FfmpegJob job;
+        job.mxcUri = mxcUri;
+        job.inPath = inPath;
+        job.outPath = outPath;
+
+        QStringList args;
+        args << "-y" << "-i" << inPath
+             << "-vf" << "scale='min(1280,iw)':-2"
+             << "-c:v" << "libx264" << "-profile:v" << "high" << "-level" << "4.0"
+             << "-preset" << "fast"
+             << "-b:v" << "2500k" << "-maxrate" << "2500k" << "-bufsize" << "5000k"
+             << "-c:a" << "aac" << "-b:a" << "128k" << "-ar" << "44100"
+             << "-movflags" << "+faststart"
+             << outPath;
+
+        QProcess *proc = new QProcess(this);
+        proc->setProcessEnvironment(berryCoreEnvironment());
+        m_ffmpegJobs[proc] = job;
+        connect(proc, SIGNAL(finished(int,QProcess::ExitStatus)), this, SLOT(onFfmpegFinished(int,QProcess::ExitStatus)));
+        connect(proc, SIGNAL(error(QProcess::ProcessError)), this, SLOT(onFfmpegError(QProcess::ProcessError)));
+        proc->start(QString::fromLatin1(kBerryCoreFfmpeg), args);
+        return;
+    }
+
+    m_inFlight.remove(mxcUri);
+    QString cachePath = cachePathFor(mxcUri);
+    QFile file(cachePath);
+    if (!file.open(QIODevice::WriteOnly)) {
+        emit mediaFailed(mxcUri);
+        return;
+    }
+    file.write(data);
+    file.close();
+
+    emit mediaReady(mxcUri, "file://" + cachePath);
+}
+
+void MediaManager::onFfmpegFinished(int exitCode, QProcess::ExitStatus exitStatus)
+{
+    QProcess *proc = qobject_cast<QProcess*>(sender());
+    if (!proc || !m_ffmpegJobs.contains(proc)) return; // error() already handled it
+    finishFfmpegJob(proc, exitStatus == QProcess::NormalExit && exitCode == 0);
+}
+
+void MediaManager::onFfmpegError(QProcess::ProcessError error)
+{
+    Q_UNUSED(error);
+    QProcess *proc = qobject_cast<QProcess*>(sender());
+    // A QProcess that fails to start never emits finished(), so this is the
+    // only signal we get in that case -- treat it the same as a nonzero
+    // exit. On a crash Qt emits both error() and finished(); this guard
+    // ensures only whichever fires first actually consumes the job.
+    if (!proc || !m_ffmpegJobs.contains(proc)) return;
+    finishFfmpegJob(proc, false);
+}
+
+// Falls back to caching the original, untranscoded video on any ffmpeg
+// failure (missing binary, unsupported input, crash, ...) rather than
+// failing the download outright -- NativeVideoPlayer's mm-renderer wrapper
+// plays arbitrary H.264/etc. content directly, so an untranscoded video
+// still works, just without the predictable size/profile ffmpeg gives it.
+void MediaManager::finishFfmpegJob(QProcess *proc, bool succeeded)
+{
+    FfmpegJob job = m_ffmpegJobs.take(proc);
+    proc->deleteLater();
+    m_inFlight.remove(job.mxcUri);
+
+    QString cachePath = cachePathFor(job.mxcUri);
+    QString sourcePath = (succeeded && QFile::exists(job.outPath)) ? job.outPath : job.inPath;
+
+    bool ok = QFile::exists(sourcePath) && QFile::copy(sourcePath, cachePath);
+    QFile::remove(job.inPath);
+    QFile::remove(job.outPath);
+
+    if (!ok) {
+        emit mediaFailed(job.mxcUri);
+        return;
+    }
+    emit mediaReady(job.mxcUri, "file://" + cachePath);
+}
+
+QString MediaManager::fetchInstagramVideo(const QString &instagramUrl)
+{
+    if (instagramUrl.isEmpty()) return QString();
+
+    QString cachePath = cachePathFor(instagramUrl);
+    if (QFile::exists(cachePath)) {
+        return "file://" + cachePath;
+    }
+    if (m_inFlight.contains(instagramUrl)) return QString();
+
+    m_inFlight.insert(instagramUrl);
+
+    // yt-dlp substitutes %(ext)s with the real container extension
+    // (mp4 for essentially every Instagram Reel); the exact resulting
+    // filename is located afterwards in finishYoutubeDlJob() via a glob.
+    QString outTemplate = cachePath + "_dl.%(ext)s";
+
+    // Clear out any leftover from a previous run that never made it to
+    // cleanup (e.g. the app was killed between yt-dlp finishing and
+    // finishYoutubeDlJob()'s QFile::remove() calls) -- otherwise that
+    // glob could match the stale file instead of (or alongside) the one
+    // this run is about to produce, serving old/wrong content for this URL.
+    {
+        QFileInfo templateInfo(outTemplate);
+        QString namePrefix = templateInfo.completeBaseName();
+        QStringList leftovers = QDir(templateInfo.absolutePath())
+                .entryList(QStringList() << (namePrefix + ".*"), QDir::Files);
+        foreach (const QString &name, leftovers) {
+            QFile::remove(templateInfo.absolutePath() + "/" + name);
+        }
+    }
+
+    QStringList args;
+    args << "-m" << "yt_dlp"
+         << "--no-warnings" << "--no-check-certificate"
+         << "--ffmpeg-location" << QString::fromLatin1(kBerryCoreFfmpeg)
+         << "-f" << "best"
+         << "-o" << outTemplate
+         << instagramUrl;
+
+    debugLog("yt-dlp starting: " + QString::fromLatin1(kBerryCorePython3) + " " + args.join(" "));
+
+    QProcess *proc = new QProcess(this);
+    proc->setProcessEnvironment(berryCoreEnvironment());
+    m_ytdlTarget[proc] = instagramUrl;
+    m_ytdlOutTemplate[proc] = outTemplate;
+    connect(proc, SIGNAL(finished(int,QProcess::ExitStatus)), this, SLOT(onYoutubeDlFinished(int,QProcess::ExitStatus)));
+    connect(proc, SIGNAL(error(QProcess::ProcessError)), this, SLOT(onYoutubeDlError(QProcess::ProcessError)));
+    proc->start(QString::fromLatin1(kBerryCorePython3), args);
+    return QString();
+}
+
+void MediaManager::onYoutubeDlFinished(int exitCode, QProcess::ExitStatus exitStatus)
+{
+    QProcess *proc = qobject_cast<QProcess*>(sender());
+    if (!proc || !m_ytdlTarget.contains(proc)) return; // error() already handled it
+    finishYoutubeDlJob(proc, exitStatus == QProcess::NormalExit && exitCode == 0);
+}
+
+void MediaManager::onYoutubeDlError(QProcess::ProcessError error)
+{
+    QProcess *proc = qobject_cast<QProcess*>(sender());
+    if (!proc || !m_ytdlTarget.contains(proc)) return;
+    debugLog(QString("yt-dlp process error: %1 (%2)").arg(int(error)).arg(proc->errorString()));
+    finishYoutubeDlJob(proc, false);
+}
+
+void MediaManager::finishYoutubeDlJob(QProcess *proc, bool succeeded)
+{
+    QString instagramUrl = m_ytdlTarget.take(proc);
+    QString outTemplate = m_ytdlOutTemplate.take(proc);
+
+    // Temporary diagnostic logging (Reel fetch bring-up) -- yt-dlp's own
+    // stdout/stderr is the only way to see WHY it failed (unsupported URL,
+    // extractor error, network issue, missing Python module, ...).
+    debugLog(QString("yt-dlp finished url=%1 succeeded=%2 exitCode=%3")
+                 .arg(instagramUrl).arg(succeeded).arg(proc->exitCode()));
+    QString stdOut = QString::fromUtf8(proc->readAllStandardOutput());
+    QString stdErr = QString::fromUtf8(proc->readAllStandardError());
+    if (!stdOut.isEmpty()) debugLog("  yt-dlp stdout: " + stdOut.left(2000));
+    if (!stdErr.isEmpty()) debugLog("  yt-dlp stderr: " + stdErr.left(2000));
+
+    proc->deleteLater();
+    m_inFlight.remove(instagramUrl);
+
+    // outTemplate is "<hash>_dl.%(ext)s" -- glob for whatever extension
+    // yt-dlp actually picked.
+    QFileInfo templateInfo(outTemplate);
+    QString namePrefix = templateInfo.completeBaseName(); // "<hash>_dl"
+    QStringList matches = QDir(templateInfo.absolutePath())
+            .entryList(QStringList() << (namePrefix + ".*"), QDir::Files);
+    debugLog(QString("  yt-dlp output matches: %1").arg(matches.join(", ")));
+
+    QString cachePath = cachePathFor(instagramUrl);
+    bool ok = false;
+    if (succeeded && !matches.isEmpty()) {
+        QString downloadedPath = templateInfo.absolutePath() + "/" + matches.first();
+        ok = QFile::copy(downloadedPath, cachePath);
+        QFile::remove(downloadedPath);
+    }
+    // Clean up any other leftover candidates (e.g. a partial .part file).
+    foreach (const QString &name, matches) {
+        QFile::remove(templateInfo.absolutePath() + "/" + name);
+    }
+
+    if (!ok) {
+        emit instagramVideoFailed(instagramUrl);
+        return;
+    }
+    emit instagramVideoReady(instagramUrl, "file://" + cachePath);
+}
+
+QString MediaManager::resolveThumbnail(const QString &mxcUri, int width, int height)
+{
+    if (mxcUri.isEmpty()) return QString();
+
+    QString cachePath = cachePathForThumbnail(mxcUri, width, height);
+    if (QFile::exists(cachePath)) {
+        return "file://" + cachePath;
+    }
+    if (m_thumbInFlight.contains(cachePath)) return QString();
+
+    QString server, mediaId;
+    if (!splitMxc(mxcUri, &server, &mediaId)) return QString();
+
+    QString downloadPath = QString("/_matrix/media/r0/thumbnail/%1/%2").arg(server, mediaId);
+    QVariantMap query;
+    query["width"] = QString::number(width);
+    query["height"] = QString::number(height);
+    query["method"] = "crop";
+    QNetworkReply *reply = m_api->rawGet(downloadPath, query);
+    m_thumbInFlight.insert(cachePath);
+    m_thumbDownloadTarget[reply] = mxcUri;
+    m_thumbCachePath[reply] = cachePath;
+    connect(reply, SIGNAL(finished()), this, SLOT(onThumbnailDownloadFinished()));
+    return QString();
+}
+
+void MediaManager::onThumbnailDownloadFinished()
+{
+    QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
+    if (!reply) return;
+    QString mxcUri = m_thumbDownloadTarget.take(reply);
+    QString cachePath = m_thumbCachePath.take(reply);
+    m_thumbInFlight.remove(cachePath);
+
+    if (reply->error() != QNetworkReply::NoError) {
+        reply->deleteLater();
+        emit thumbnailFailed(mxcUri);
+        return;
+    }
+
+    QByteArray data = reply->readAll();
+    reply->deleteLater();
+
+    QFile file(cachePath);
+    if (!file.open(QIODevice::WriteOnly)) {
+        emit thumbnailFailed(mxcUri);
+        return;
+    }
+    file.write(data);
+    file.close();
+
+    emit thumbnailReady(mxcUri, "file://" + cachePath);
+}
+
+QString MediaManager::newRecordingPath()
+{
+    // Plain filesystem path, matching what upload()/QFile expect (and what
+    // FilePicker's selectedFiles already hands sendImage() for photos) --
+    // callers setting bb.multimedia.AudioRecorder::outputUrl (a QUrl) need
+    // to prefix "file://" themselves.
+    return QString("%1/recording_%2.m4a").arg(m_cacheDir).arg(++m_recordingCounter);
+}
+
+void MediaManager::debugLog(const QString &line)
+{
+    // Shared/misc, not QDir::homePath() (this app's own private sandbox) --
+    // the latter is unreachable from Term49/BerryCore without a Developer
+    // Mode-paired blackberry-deploy -getFile round-trip from a PC, while
+    // shared/misc is a plain `cat` away from the on-device shell already
+    // used for every other diagnostic log this session (beport_tls_log.txt
+    // etc).
+    QFile file("/accounts/1000/shared/misc/beport_debug.log");
+    if (!file.open(QIODevice::Append | QIODevice::Text)) return;
+    QTextStream out(&file);
+    out << QDateTime::currentDateTime().toString("HH:mm:ss.zzz") << "  " << line << "\n";
+}
+
+QString MediaManager::mimeTypeForFile(const QString &path) const
+{
+    QString ext = QFileInfo(path).suffix().toLower();
+    if (ext == "jpg" || ext == "jpeg") return "image/jpeg";
+    if (ext == "png") return "image/png";
+    if (ext == "gif") return "image/gif";
+    if (ext == "mp4") return "video/mp4";
+    if (ext == "3gp") return "video/3gpp";
+    if (ext == "amr") return "audio/amr";
+    if (ext == "mp3") return "audio/mpeg";
+    if (ext == "m4a") return "audio/mp4";
+    return "application/octet-stream";
+}
+
+void MediaManager::upload(const QString &localFilePath)
+{
+    QFile file(localFilePath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        emit uploadFinished(localFilePath, QString(), QString(), false);
+        return;
+    }
+    QByteArray data = file.readAll();
+    file.close();
+
+    QString mimeType = mimeTypeForFile(localFilePath);
+    QString fileName = QFileInfo(localFilePath).fileName();
+    QString path = QString("/_matrix/media/r0/upload?filename=%1")
+            .arg(QString(QUrl::toPercentEncoding(fileName)));
+
+    QNetworkReply *reply = m_api->apiPostRaw(path, data, mimeType);
+    m_uploadSourcePath[reply] = localFilePath;
+    m_uploadMimeType[reply] = mimeType;
+    connect(reply, SIGNAL(finished()), this, SLOT(onUploadFinished()));
+}
+
+void MediaManager::onUploadFinished()
+{
+    QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
+    if (!reply) return;
+    QString localFilePath = m_uploadSourcePath.take(reply);
+    QString mimeType = m_uploadMimeType.take(reply);
+
+    bool ok = false;
+    QVariant parsed = MatrixApi::parseJson(reply, &ok);
+    reply->deleteLater();
+
+    QVariantMap map = parsed.toMap();
+    QString mxcUri = map.value("content_uri").toString();
+    if (!ok || mxcUri.isEmpty()) {
+        emit uploadFinished(localFilePath, QString(), mimeType, false);
+        return;
+    }
+    emit uploadFinished(localFilePath, mxcUri, mimeType, true);
+}

@@ -1,0 +1,8 @@
+Emoji graphics in this folder are from Twemoji (jdecked/twemoji, v17.0.3),
+originally created by Twitter, Inc. and released under CC-BY 4.0:
+
+https://github.com/jdecked/twemoji
+https://creativecommons.org/licenses/by/4.0/
+
+Copyright 2020 Twitter, Inc and other contributors.
+Graphics licensed under CC-BY 4.0: https://creativecommons.org/licenses/by/4.0/

@@ -1,0 +1,135 @@
+#ifndef MEDIAMANAGER_HPP_
+#define MEDIAMANAGER_HPP_
+
+#include <QObject>
+#include <QString>
+#include <QHash>
+#include <QSet>
+#include <QVariantMap>
+#include <QProcess>
+
+class MatrixApi;
+class QNetworkReply;
+
+// Downloads and caches mxc:// media to local disk so QML ImageView can show
+// it, and uploads local files back to the homeserver for outgoing media
+// messages.
+class MediaManager : public QObject
+{
+    Q_OBJECT
+
+public:
+    explicit MediaManager(MatrixApi *api, QObject *parent = 0);
+    virtual ~MediaManager();
+
+    // Returns a "file://" path if already cached; otherwise starts an async
+    // download (mediaReady() fires later) and returns an empty string. When
+    // key/iv are non-empty (an E2EE room's "file" object: key.k, iv,
+    // hashes.sha256), the downloaded ciphertext is AES-256-CTR decrypted
+    // before being cached, so the cached file is always plaintext -- callers
+    // (QML's ImageView, etc.) never need to know whether the source room was
+    // encrypted.
+    // isVideo routes the downloaded (and decrypted, if applicable) bytes
+    // through BerryCore's on-device ffmpeg binary before caching -- the Q5's
+    // hardware video decoder can't handle the resolution/profile most phones
+    // export by default, so ffmpeg re-encodes it (via QProcess, right here on
+    // the phone) into a profile the Q5 can actually decode.
+    Q_INVOKABLE QString resolve(const QString &mxcUri, const QString &key = QString(), const QString &iv = QString(), const QString &sha256 = QString(), bool isVideo = false);
+
+    // Reads localFilePath, uploads it, then emits uploadFinished.
+    Q_INVOKABLE void upload(const QString &localFilePath);
+
+    // Same "return cached path or start async fetch" contract as resolve(),
+    // but via the dedicated /thumbnail endpoint at the given pixel size --
+    // much cheaper than a full-resolution download for the small avatars
+    // shown in the room list and message bubbles. Room/member avatars are
+    // never E2EE-encrypted (per spec), so there's no decrypt path here.
+    Q_INVOKABLE QString resolveThumbnail(const QString &mxcUri, int width = 96, int height = 96);
+
+    // A fresh "file://" path (a new filename every call, so back-to-back
+    // recordings never collide) under the same cache directory downloads
+    // use, for bb.multimedia.AudioRecorder's outputUrl.
+    Q_INVOKABLE QString newRecordingPath();
+
+    // Returns a "file://" path if already cached; otherwise starts an async
+    // fetch (instagramVideoReady() fires later) and returns an empty string.
+    // instagramUrl is an Instagram post/Reel page link (see
+    // SyncEngine/MessageListModel's extractMediaFields(), which flags these
+    // via content.external_url) -- the Beeper Instagram bridge never gives
+    // Beport an actual playable video, just a thumbnail and this link.
+    // Fetching shells out (via QProcess) to BerryCore's on-device youtube-dl
+    // binary, which extracts and downloads the real video (fragile: breaks
+    // if Instagram changes their page markup, or if the linked post isn't
+    // actually a video/Reel).
+    Q_INVOKABLE QString fetchInstagramVideo(const QString &instagramUrl);
+
+    // Appends a timestamped line to
+    // /accounts/1000/shared/misc/beport_debug.log. Exists because there's
+    // no way to see qDebug()/console.log() output from a real device
+    // without a signed debug token to attach a debugger -- shared/misc
+    // (not this app's own private sandbox) so it's a plain `cat
+    // beport_debug.log` away from Term49/any on-device shell, no PC round-
+    // trip needed.
+    Q_INVOKABLE void debugLog(const QString &line);
+
+signals:
+    void mediaReady(const QString &mxcUri, const QString &localFileUrl);
+    void mediaFailed(const QString &mxcUri);
+    void uploadFinished(const QString &localFilePath, const QString &mxcUri, const QString &mimeType, bool ok);
+    void thumbnailReady(const QString &mxcUri, const QString &localFileUrl);
+    void thumbnailFailed(const QString &mxcUri);
+    void instagramVideoReady(const QString &instagramUrl, const QString &localFileUrl);
+    void instagramVideoFailed(const QString &instagramUrl);
+
+private slots:
+    void onDownloadFinished();
+    void onUploadFinished();
+    void onThumbnailDownloadFinished();
+    void onFfmpegFinished(int exitCode, QProcess::ExitStatus exitStatus);
+    void onFfmpegError(QProcess::ProcessError error);
+    void onYoutubeDlFinished(int exitCode, QProcess::ExitStatus exitStatus);
+    void onYoutubeDlError(QProcess::ProcessError error);
+
+private:
+    struct CryptoInfo {
+        QString key;
+        QString iv;
+        QString sha256;
+    };
+
+    QString cachePathFor(const QString &mxcUri) const;
+    QString cachePathForThumbnail(const QString &mxcUri, int width, int height) const;
+    static bool splitMxc(const QString &mxcUri, QString *server, QString *mediaId);
+    QString mimeTypeForFile(const QString &path) const;
+    // Decrypts an E2EE media blob per the Matrix "EncryptedFile" format
+    // (AES-256-CTR, key.k as unpadded base64url, iv as base64). Returns
+    // false (leaving *plaintextOut untouched) on a bad key/iv or a ciphertext
+    // sha256 mismatch against info.sha256 (skipped if info.sha256 is empty).
+    static bool decryptFile(const QByteArray &ciphertext, const CryptoInfo &info, QByteArray *plaintextOut);
+    void finishFfmpegJob(QProcess *proc, bool succeeded);
+    void finishYoutubeDlJob(QProcess *proc, bool succeeded);
+
+    struct FfmpegJob {
+        QString mxcUri;
+        QString inPath;
+        QString outPath;
+    };
+
+    MatrixApi *m_api;
+    QString m_cacheDir;
+    QSet<QString> m_inFlight;
+    QHash<QNetworkReply*, QString> m_downloadTarget;
+    QHash<QString, CryptoInfo> m_cryptoInfo; // mxcUri -> decryption params, consumed in onDownloadFinished
+    QSet<QString> m_videoDownload; // mxcUri, consumed in onDownloadFinished
+    QHash<QProcess*, FfmpegJob> m_ffmpegJobs;
+    QHash<QNetworkReply*, QString> m_uploadSourcePath;
+    QHash<QNetworkReply*, QString> m_uploadMimeType;
+    QSet<QString> m_thumbInFlight; // cache paths currently being fetched
+    QHash<QNetworkReply*, QString> m_thumbDownloadTarget; // reply -> mxcUri
+    QHash<QNetworkReply*, QString> m_thumbCachePath; // reply -> its cache path
+    QHash<QProcess*, QString> m_ytdlTarget; // process -> instagramUrl
+    QHash<QProcess*, QString> m_ytdlOutTemplate; // process -> youtube-dl -o template (to locate the actual output file)
+    int m_recordingCounter;
+};
+
+#endif /* MEDIAMANAGER_HPP_ */
