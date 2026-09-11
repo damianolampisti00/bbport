@@ -1,5 +1,5 @@
 1
-4025
+4026
 bbport_logo.png
 cacert.pem
 cover.qml
@@ -4025,3 +4025,4 @@ icons/send.svg
 icons/send.xpm
 main.qml
 MessageBubbleContent.qml
+VerificationOverlay.qml

@@ -10,7 +10,13 @@ This is a hobby project built for a specific piece of ten-year-old hardware most
 
 ## Screenshots
 
-*(add screenshots here — e.g. `docs/screenshots/inbox.png`, `docs/screenshots/chat.png`)*
+| Login | Inbox | Chat |
+|---|---|---|
+| ![Login](docs/screenshots/login.png) | ![Inbox](docs/screenshots/inbox.png) | ![Chat](docs/screenshots/chat.png) |
+
+| Long-press menu | Hidden chats |
+|---|---|
+| ![Message long-press menu](docs/screenshots/message-menu.png) | ![Hidden chats](docs/screenshots/hidden-chats.png) |
 
 ## Features
 
