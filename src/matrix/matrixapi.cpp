@@ -21,9 +21,11 @@ MatrixApi::MatrixApi(QObject *parent) :
 #ifdef BBPORT_HAVE_NATIVE_TLS
         // Device builds do TLS 1.2 natively via mbedTLS (BB10's system
         // OpenSSL only speaks TLS 1.0, which real homeservers reject) --
-        // see tlsnetworkreply.hpp. Simulator builds keep using Qt's own
-        // QSslSocket-backed QNetworkAccessManager against the local
-        // tls-bridge-proxy.py helper instead.
+        // see tlsnetworkreply.hpp. Simulator builds fall back to Qt's own
+        // QSslSocket-backed QNetworkAccessManager, which can't reach a real
+        // homeserver directly (see the Simulator note in README.md) --
+        // untested/unsupported for actual login, kept only so the
+        // Simulator-Debug configuration still compiles.
         m_nam(new TlsNetworkAccessManager(this)),
 #else
         m_nam(new QNetworkAccessManager(this)),
@@ -75,11 +77,6 @@ QString MatrixApi::lastError() const
 void MatrixApi::setPreferredDeviceId(const QString &deviceId)
 {
     m_preferredDeviceId = deviceId;
-}
-
-QNetworkAccessManager* MatrixApi::networkManager()
-{
-    return m_nam;
 }
 
 void MatrixApi::setBusy(bool busy)

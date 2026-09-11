@@ -48,7 +48,7 @@ src/                    C++ sources
     base58.*                Recovery Key encoding
 assets/                 QML UI (main.qml is the whole app's UI; everything else is a supporting component)
 third_party/            Vendored libolm, mbedTLS, opus (headers + prebuilt static libs)
-tools/                  Standalone helper scripts (see tools/tls-bridge-proxy.py's own docstring — largely superseded by native TLS, kept as a documented fallback)
+tools/                  Standalone dev-machine helper scripts (currently just gen_emojimap.ps1, which regenerates assets/emojimap.js from the bundled Twemoji set)
 ```
 
 ## Code conventions

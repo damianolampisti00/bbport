@@ -34,14 +34,6 @@ static void appendSsssLog(const QString &line)
     }
 }
 
-// Dedicated address for the local key-import helper (tools/tls-bridge-proxy.py's
-// /bbport/megolm-sessions endpoint) -- deliberately independent of
-// MatrixApi::homeserver(), which now points at the real homeserver directly
-// (native TLS, see tlsnetworkreply.cpp) rather than at this proxy. Start the
-// proxy on the phone itself (BerryCore's python3) when an import is needed;
-// it isn't required for normal chat traffic anymore.
-static const char *kMegolmProxyUrl = "http://127.0.0.1:8008/bbport/megolm-sessions";
-
 // Matrix uses unpadded base64 throughout; Qt's QByteArray::fromBase64() is
 // not reliably tolerant of missing '=' padding, so decode with libolm's own
 // (unpadded-native) base64 implementation instead, for every base64 field
@@ -126,7 +118,6 @@ KeyBackupManager::~KeyBackupManager()
 bool KeyBackupManager::isUnlocked() const { return m_unlocked; }
 bool KeyBackupManager::isBusy() const { return m_busy; }
 QString KeyBackupManager::lastError() const { return m_lastError; }
-QString KeyBackupManager::importStatus() const { return m_importStatus; }
 
 void KeyBackupManager::setBusy(bool busy)
 {
@@ -139,12 +130,6 @@ void KeyBackupManager::setLastError(const QString &error)
 {
     m_lastError = error;
     emit lastErrorChanged();
-}
-
-void KeyBackupManager::setImportStatus(const QString &status)
-{
-    m_importStatus = status;
-    emit importStatusChanged();
 }
 
 void KeyBackupManager::freePkDecryption()
@@ -513,74 +498,6 @@ bool KeyBackupManager::importExportedSession(const QString &roomId, const QStrin
     }
     m_sessions[key] = mem;
     return true;
-}
-
-void KeyBackupManager::importFromProxy()
-{
-    setBusy(true);
-    QUrl url(kMegolmProxyUrl);
-    QNetworkRequest request(url);
-    QNetworkReply *reply = m_api->networkManager()->get(request);
-    connect(reply, SIGNAL(finished()), this, SLOT(onProxyImportReplyFinished()));
-}
-
-void KeyBackupManager::onProxyImportReplyFinished()
-{
-    QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
-    setBusy(false);
-    if (!reply) return;
-
-    QNetworkReply::NetworkError netError = reply->error();
-
-    bool ok = false;
-    QVariant parsed = MatrixApi::parseJson(reply, &ok);
-    reply->deleteLater();
-
-    if (!ok) {
-        // Connection-refused is the expected, common case now -- the proxy
-        // is an optional, on-demand helper (start it on the phone via
-        // BerryCore's python3 when you actually want to import an old
-        // Element key export), not something required for normal use.
-        if (netError == QNetworkReply::ConnectionRefusedError) {
-            setImportStatus("Key import proxy not started (only start it on the phone if you need to import an Element key export).");
-        } else {
-            setImportStatus("Couldn't reach the Megolm key proxy.");
-        }
-        return;
-    }
-
-    QVariantList sessions = parsed.toList();
-    QStringList readySessions; // "roomId|sessionId" for the ones that imported cleanly
-    int imported = 0;
-    for (int i = 0; i < sessions.size(); ++i) {
-        QVariantMap s = sessions.at(i).toMap();
-        QString roomId = s.value("room_id").toString();
-        QString sessionId = s.value("session_id").toString();
-        QString sessionKeyB64 = s.value("session_key").toString();
-        if (roomId.isEmpty() || sessionId.isEmpty() || sessionKeyB64.isEmpty()) continue;
-        if (importExportedSession(roomId, sessionId, sessionKeyB64)) {
-            imported++;
-            readySessions << sessionKey(roomId, sessionId);
-        }
-    }
-
-    if (sessions.isEmpty()) {
-        // The proxy itself can't tell "genuinely zero keys" apart from "no
-        // export file/passphrase configured at all" (both just mean its own
-        // MEGOLM_SESSIONS_CACHE is empty) -- but since this now runs
-        // automatically on every login rather than behind a manual button,
-        // staying silent here is exactly the "fails silently" behavior this
-        // wording exists to fix. The proxy not being configured for this at
-        // all is by far the more likely reason to see zero, so say so.
-        setImportStatus("No Megolm keys from the proxy (it was probably not started with the export file and passphrase).");
-    } else {
-        setImportStatus(QString("Imported %1 of %2 Megolm sessions from the proxy.").arg(imported).arg(sessions.size()));
-    }
-
-    for (int i = 0; i < readySessions.size(); ++i) {
-        QStringList parts = readySessions.at(i).split("|");
-        if (parts.size() == 2) emit sessionReady(parts.at(0), parts.at(1));
-    }
 }
 
 void KeyBackupManager::requestSession(const QString &roomId, const QString &sessionId)

@@ -9,9 +9,9 @@
 
 // Routes https:// requests through TlsNetworkReply (mbedTLS-based, TLS 1.2)
 // instead of Qt's QSslSocket backend, which can't be pointed at a modern
-// OpenSSL on BB10 (see tlsnetworkreply.hpp for why). Plain http:// requests
-// (e.g. KeyBackupManager's fetch from the local tls-bridge-proxy.py helper
-// on 127.0.0.1) fall through to Qt's normal implementation unchanged.
+// OpenSSL on BB10 (see tlsnetworkreply.hpp for why). Any plain http://
+// request would fall through to Qt's normal implementation unchanged, but
+// nothing in this app makes one.
 class TlsNetworkAccessManager : public QNetworkAccessManager
 {
     Q_OBJECT

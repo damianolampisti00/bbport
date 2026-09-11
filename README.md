@@ -66,7 +66,7 @@ Bump `<buildId>` in `bar-descriptor.xml` before each new package you intend to i
 
 ### Simulator builds
 
-The `blackberry-x86-qcc` simulator target is supported by the project (`BBport.pro` has a `simulator{}` scope), but native TLS (`BBPORT_HAVE_NATIVE_TLS`) is device-only; the simulator falls back to Qt's own `QSslSocket`-backed networking, which cannot reach a modern homeserver directly (see [Architecture](#architecture) below) — it would need `tools/tls-bridge-proxy.py` pointed at as the homeserver instead.
+The `blackberry-x86-qcc` simulator target is supported by the project (`BBport.pro` has a `simulator{}` scope) in that it compiles, but native TLS (`BBPORT_HAVE_NATIVE_TLS`) is device-only; the simulator falls back to Qt's own `QSslSocket`-backed networking, which cannot reach a modern homeserver directly (see [Architecture](#architecture) below). There's currently no bundled workaround for that — logging in from a Simulator build against a real homeserver isn't expected to work.
 
 ## Installing
 

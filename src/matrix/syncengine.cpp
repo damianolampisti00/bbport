@@ -76,9 +76,9 @@ static void extractMediaFields(const QVariantMap &content, QVariantMap *outEvent
     // the static thumbnail) plus this external_url pointing at the real
     // Instagram page -- never an actual playable video. Flagging it here
     // lets the UI offer "watch as video", which fetches and extracts the
-    // real video through tools/tls-bridge-proxy.py's /bbport/instagram-video
-    // (see its own comments -- this is HTML scraping, so it can break
-    // whenever Instagram changes their page markup).
+    // real video on-device via yt-dlp (see MediaManager::fetchInstagramVideo())
+    // -- this is HTML/page scraping under the hood, so it can break whenever
+    // Instagram changes their page markup.
     QString externalUrl = content.value("external_url").toString();
     if (externalUrl.contains("instagram.com/p/") || externalUrl.contains("instagram.com/reel/")) {
         (*outEvent)["instagramUrl"] = externalUrl;

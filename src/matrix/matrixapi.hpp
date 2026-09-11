@@ -51,8 +51,6 @@ public:
     // already contain the full "/_matrix/media/..." path.
     QNetworkReply* rawGet(const QString &absolutePath, const QVariantMap &query = QVariantMap());
 
-    QNetworkAccessManager* networkManager();
-
     // Monotonically increasing transaction id for idempotent sends.
     Q_INVOKABLE QString nextTxnId();
 

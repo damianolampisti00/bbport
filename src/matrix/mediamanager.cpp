@@ -31,10 +31,10 @@ extern "C" {
 using namespace bb::data;
 
 // Video transcoding and Instagram Reel extraction used to be delegated to a
-// dev-machine PC proxy (see tools/tls-bridge-proxy.py, now retired); both
-// features moved on-device using BerryCore's (github.com/sw7ft/BerryCore)
-// bundled ffmpeg/yt-dlp binaries instead, invoked directly via QProcess.
-// No PC involvement needed any more.
+// dev-machine PC proxy script (long since removed); both features moved
+// on-device using BerryCore's (github.com/sw7ft/BerryCore) bundled
+// ffmpeg/yt-dlp binaries instead, invoked directly via QProcess. No PC
+// involvement needed any more.
 static const char *kBerryCoreRoot = "/accounts/1000/shared/misc/berrycore";
 static const char *kBerryCoreFfmpeg = "/accounts/1000/shared/misc/berrycore/bin/ffmpeg";
 static const char *kBerryCorePython3 = "/accounts/1000/shared/misc/berrycore/bin/python3";

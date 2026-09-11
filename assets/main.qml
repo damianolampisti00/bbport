@@ -854,11 +854,11 @@ NavigationPane {
                         }
                     }
                     Container {
-                        // Reel fetch failed (Instagram scraping is fragile
-                        // by nature -- see fetch_instagram_video_bytes() in
-                        // tools/tls-bridge-proxy.py). Stays up until the
-                        // next Reel tap rather than auto-hiding after a
-                        // delay, to avoid a QML Timer element here.
+                        // Reel fetch failed (Instagram page scraping is
+                        // fragile by nature -- see
+                        // MediaManager::fetchInstagramVideo()). Stays up
+                        // until the next Reel tap rather than auto-hiding
+                        // after a delay, to avoid a QML Timer element here.
                         visible: reelError
                         horizontalAlignment: HorizontalAlignment.Center
                         verticalAlignment: VerticalAlignment.Top
