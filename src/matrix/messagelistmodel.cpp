@@ -451,6 +451,11 @@ void MessageListModel::setRoomId(const QString &roomId)
     }
     m_model->append(displayItems);
 
+    // See loadOlderMessages()'s "bootstrap" comment -- a room TimelineStore
+    // has never received a live /sync timeline for opens genuinely empty and
+    // stays that way forever without this, confirmed via a real device log.
+    if (cached.isEmpty()) loadOlderMessages();
+
     QStringList typingUsers = m_store->typingUsersForRoom(roomId);
     m_typingText = typingUsers.isEmpty() ? QString() : QString("%1 sta scrivendo...").arg(typingUsers.join(", "));
 
@@ -1084,7 +1089,21 @@ void MessageListModel::loadOlderMessages()
     if (m_roomId.isEmpty() || m_loadingHistory || m_historyExhausted) return;
 
     QString from = m_store->prevBatchFor(m_roomId);
-    if (from.isEmpty()) {
+    // A room TimelineStore has never received a single live /sync timeline
+    // for (e.g. this app session resumed from an already-caught-up "since"
+    // token, so an incremental /sync never even mentions a room with no new
+    // activity -- confirmed via a real log showing every freshly-opened room
+    // at cached=0 prevBatch=empty) has no prevBatch to page from, but that's
+    // not the same as "reached the start of history": it means history was
+    // never fetched at all. Bootstrapping via a /messages call with no
+    // "from" (server defaults to paginating backward from the room's live
+    // end) is the only way such a room ever gets any content -- otherwise it
+    // stays permanently empty until unrelated /sync traffic happens to touch
+    // it. Only do this when the store genuinely has nothing yet; an empty
+    // prevBatch after some history IS cached means real exhaustion (already
+    // paged back to the start), which must still stop here as before.
+    bool bootstrap = from.isEmpty() && m_store->eventsForRoom(m_roomId).isEmpty();
+    if (from.isEmpty() && !bootstrap) {
         setHistoryExhausted(true);
         return;
     }
@@ -1095,7 +1114,7 @@ void MessageListModel::loadOlderMessages()
     QVariantMap query;
     query["dir"] = "b";
     query["limit"] = QString::number(kHistoryPageSize);
-    query["from"] = from;
+    if (!bootstrap) query["from"] = from;
 
     QNetworkReply *reply = m_api->apiGet(path, query);
     reply->setProperty("bbport_history_room", m_roomId);
