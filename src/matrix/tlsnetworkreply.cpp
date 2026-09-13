@@ -103,20 +103,22 @@ QByteArray headerValue(const QList<QPair<QByteArray, QByteArray> > &headers, con
 // enough: a /sync long-poll sitting in this call is exactly the case most
 // likely to be mid-read when the watchdog times out, and if that particular
 // shutdown() doesn't actually interrupt the underlying blocking MsgReceive,
-// this loop retried WANT_READ forever and the thread never returned from
-// run() -- leaked permanently (root cause behind a Momentics debug session
-// showing 226 live threads and eventual bps_channel_create/bps_initialize
-// failures -- see conversation). Fixed by not trusting the cross-thread
-// nudge alone: run() now sets SO_RCVTIMEO on the socket once connected, so a
-// stalled read comes back WANT_READ/WANT_WRITE on its own on a bounded
+// this loop retried forever and the thread never returned from run() --
+// leaked permanently (root cause behind a Momentics debug session showing
+// 226 live threads and eventual bps_channel_create/bps_initialize failures
+// -- see conversation). Fixed by not trusting the cross-thread nudge alone:
+// run() configures mbedTLS's own read-timeout receive path (see its
+// mbedtls_ssl_conf_read_timeout()/mbedtls_net_recv_timeout() comment), so a
+// stalled read comes back MBEDTLS_ERR_SSL_TIMEOUT on its own on a bounded
 // cadence, and this thread checks its own abort flag right here before ever
-// retrying.
+// retrying -- WANT_READ/WANT_WRITE can still happen too (e.g. a TLS
+// renegotiation needing a write) and get the same treatment.
 int sslReadMore(mbedtls_ssl_context *ssl, QByteArray &pending, bool *peerClosed, TlsRequestThread *self)
 {
     unsigned char buf[4096];
     for (;;) {
         int n = mbedtls_ssl_read(ssl, buf, sizeof(buf));
-        if (n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE) {
+        if (n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE || n == MBEDTLS_ERR_SSL_TIMEOUT) {
             if (self->wasAborted()) {
                 *peerClosed = true;
                 return 0;
@@ -277,20 +279,6 @@ void TlsRequestThread::run()
     }
 
     if (!failed) {
-        // Bounds every later blocking read on this socket (handshake, HTTP
-        // response, and in particular a /sync long-poll) to a few seconds at
-        // a time, so a stalled read comes back MBEDTLS_ERR_SSL_WANT_READ on
-        // its own instead of blocking indefinitely -- see sslReadMore()'s
-        // comment for why this thread can no longer rely solely on
-        // requestAbort()'s cross-thread shutdown() to notice an abort.
-        struct timeval rcvTimeout;
-        rcvTimeout.tv_sec = 3;
-        rcvTimeout.tv_usec = 0;
-        setsockopt(m_netCtx.fd, SOL_SOCKET, SO_RCVTIMEO,
-                   reinterpret_cast<const char *>(&rcvTimeout), sizeof(rcvTimeout));
-    }
-
-    if (!failed) {
         ret = mbedtls_ssl_config_defaults(&conf, MBEDTLS_SSL_IS_CLIENT,
                                            MBEDTLS_SSL_TRANSPORT_STREAM,
                                            MBEDTLS_SSL_PRESET_DEFAULT);
@@ -305,6 +293,31 @@ void TlsRequestThread::run()
         mbedtls_ssl_conf_authmode(&conf, MBEDTLS_SSL_VERIFY_REQUIRED);
         mbedtls_ssl_conf_ca_chain(&conf, &ca->cacert, 0);
         mbedtls_ssl_conf_rng(&conf, mbedtls_ctr_drbg_random, &ctr_drbg);
+        // Bounds every individual blocking read below (handshake, HTTP
+        // response, and in particular a /sync long-poll) to a few seconds at
+        // a time via mbedTLS's own timeout-aware receive path (see the
+        // mbedtls_ssl_set_bio() call just below), so a stalled read comes
+        // back MBEDTLS_ERR_SSL_TIMEOUT on its own instead of blocking
+        // indefinitely -- see sslReadMore()'s comment for why this thread
+        // can no longer rely solely on requestAbort()'s cross-thread
+        // shutdown() to notice an abort.
+        //
+        // A raw socket-level SO_RCVTIMEO was tried here first and broke
+        // every /sync long-poll outright (every plain request -- login,
+        // keys/upload, ... -- still succeeded, since those get an answer in
+        // well under this timeout, but /sync's up-to-30s wait hit it on
+        // every single attempt): confirmed on-device that
+        // mbedtls_net_recv() (the plain, non-timeout-aware recv callback)
+        // doesn't reliably turn a SO_RCVTIMEO expiry on this QNX network
+        // stack into MBEDTLS_ERR_SSL_WANT_READ, so mbedTLS treated the
+        // *expected*, ordinary "nothing happened yet" case of an idle long-
+        // poll as a hard read failure and tore the connection down. mbedTLS
+        // ships mbedtls_net_recv_timeout() plus mbedtls_ssl_conf_read_timeout()
+        // for exactly this scenario -- it already returns the distinct,
+        // properly-mbedTLS-recognized MBEDTLS_ERR_SSL_TIMEOUT on its own
+        // timeout, with no dependency on how this platform's recv()
+        // reports EAGAIN/EWOULDBLOCK/ETIMEDOUT.
+        mbedtls_ssl_conf_read_timeout(&conf, 5000);
 
         ret = mbedtls_ssl_setup(&ssl, &conf);
         if (ret == 0) {
@@ -319,7 +332,7 @@ void TlsRequestThread::run()
     }
 
     if (!failed) {
-        mbedtls_ssl_set_bio(&ssl, &m_netCtx, mbedtls_net_send, mbedtls_net_recv, 0);
+        mbedtls_ssl_set_bio(&ssl, &m_netCtx, mbedtls_net_send, mbedtls_net_recv, mbedtls_net_recv_timeout);
 
         while ((ret = mbedtls_ssl_handshake(&ssl)) != 0) {
             if (wasAborted()) {
@@ -327,6 +340,7 @@ void TlsRequestThread::run()
                 failed = true;
                 break;
             }
+            if (ret == MBEDTLS_ERR_SSL_TIMEOUT) continue; // no data within this read's slice -- not a failure, keep handshaking
             if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
                 mbedtls_strerror(ret, errbuf, sizeof(errbuf));
                 netError = QNetworkReply::SslHandshakeFailedError;

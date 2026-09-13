@@ -175,7 +175,15 @@ bool KeyBackupManager::parseRecoveryKey(const QString &input, QByteArray *privat
         return false;
     }
     if (raw.size() != kRecoveryKeyRawLength) {
-        if (errorOut) *errorOut = "Invalid Recovery Key (unexpected length).";
+        // Includes the actual decoded byte count (not just "wrong") since
+        // this is otherwise impossible to diagnose remotely -- e.g. a
+        // clipboard paste that grabbed a few extra characters around the
+        // key (a label like "Recovery Key: ...") would still decode as
+        // valid base58 (most letters/digits ARE valid base58 digits) but
+        // produce a too-long result, distinguishable from a simple typo/
+        // missed-character case only by seeing the actual count.
+        if (errorOut) *errorOut = QString("Invalid Recovery Key (unexpected length: got %1 bytes, expected %2).")
+                .arg(raw.size()).arg(kRecoveryKeyRawLength);
         return false;
     }
     unsigned char parity = 0;
