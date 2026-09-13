@@ -1,6 +1,7 @@
 #include "mediamanager.hpp"
 #include "matrixapi.hpp"
 #include "oggopusdecoder.hpp"
+#include "bbportlog.hpp"
 
 #include <bb/data/JsonDataAccess>
 
@@ -717,16 +718,12 @@ QString MediaManager::newRecordingPath()
 
 void MediaManager::debugLog(const QString &line)
 {
-    // Shared/misc, not QDir::homePath() (this app's own private sandbox) --
-    // the latter is unreachable from Term49/BerryCore without a Developer
-    // Mode-paired blackberry-deploy -getFile round-trip from a PC, while
-    // shared/misc is a plain `cat` away from the on-device shell already
-    // used for every other diagnostic log this session (bbport_tls_log.txt
-    // etc).
-    QFile file("/accounts/1000/shared/misc/bbport_debug.log");
-    if (!file.open(QIODevice::Append | QIODevice::Text)) return;
-    QTextStream out(&file);
-    out << QDateTime::currentDateTime().toString("HH:mm:ss.zzz") << "  " << line << "\n";
+    // bbportLog() writes to the same shared/misc file this used to write
+    // directly (still readable via Term49/BerryCore with no PC round-trip)
+    // AND to qDebug(), so these lines -- yt-dlp's carousel command/exit
+    // code/stdout/stderr in particular -- also show up live in Momentics'
+    // console instead of only being visible via the file.
+    bbportLog(line);
 }
 
 QString MediaManager::mimeTypeForFile(const QString &path) const
