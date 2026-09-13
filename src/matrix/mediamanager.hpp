@@ -8,6 +8,7 @@
 #include <QVariantMap>
 #include <QVariantList>
 #include <QProcess>
+#include <QTimer>
 
 namespace bb { namespace system { class InvokeManager; } }
 
@@ -135,6 +136,7 @@ private slots:
     void onYoutubeDlError(QProcess::ProcessError error);
     void onCarouselYoutubeDlFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void onCarouselYoutubeDlError(QProcess::ProcessError error);
+    void onCarouselTimeout();
     void onAudioTranscodeFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void onAudioTranscodeError(QProcess::ProcessError error);
 
@@ -194,6 +196,15 @@ private:
     QHash<QProcess*, QString> m_ytdlOutTemplate; // process -> youtube-dl -o template (to locate the actual output file)
     QHash<QProcess*, QString> m_carouselTarget; // process -> instagramUrl (the exact slide link that was tapped, for the signal's identity)
     QHash<QProcess*, QString> m_carouselOutPrefix; // process -> output filename prefix (to glob the resulting per-slide files)
+    // A carousel fetch expands into a whole yt-dlp playlist run (multiple
+    // slides, each its own network fetch) instead of one Reel's single
+    // download -- if Instagram serves a login/consent wall or otherwise
+    // hangs mid-playlist, yt-dlp can sit with no output and no exit forever.
+    // Without this watchdog, that leaves the QML gallery's "Caricamento
+    // carosello..." overlay stuck permanently, since neither
+    // instagramCarouselReady nor instagramCarouselFailed would ever fire.
+    QHash<QProcess*, QTimer*> m_carouselProcTimer; // process -> its watchdog timer (cleared on normal finish)
+    QHash<QTimer*, QProcess*> m_carouselTimeoutTarget; // watchdog timer -> the process it guards
     QHash<QProcess*, AudioUploadJob> m_audioUploadJobs;
     QHash<QString, QString> m_uploadPathRemap; // transcoded temp path -> original path, consumed in onUploadFinished
     bb::system::InvokeManager *m_invokeManager;

@@ -540,7 +540,30 @@ QVariantList MediaManager::fetchInstagramCarousel(const QString &instagramUrl)
     connect(proc, SIGNAL(finished(int,QProcess::ExitStatus)), this, SLOT(onCarouselYoutubeDlFinished(int,QProcess::ExitStatus)));
     connect(proc, SIGNAL(error(QProcess::ProcessError)), this, SLOT(onCarouselYoutubeDlError(QProcess::ProcessError)));
     proc->start(QString::fromLatin1(kBerryCorePython3), args);
+
+    // See m_carouselProcTimer's doc comment: guarantees finishCarouselJob()
+    // always eventually runs even if yt-dlp itself never exits.
+    QTimer *watchdog = new QTimer(this);
+    watchdog->setSingleShot(true);
+    m_carouselProcTimer[proc] = watchdog;
+    m_carouselTimeoutTarget[watchdog] = proc;
+    connect(watchdog, SIGNAL(timeout()), this, SLOT(onCarouselTimeout()));
+    watchdog->start(45000);
+
     return QVariantList();
+}
+
+void MediaManager::onCarouselTimeout()
+{
+    QTimer *watchdog = qobject_cast<QTimer*>(sender());
+    if (!watchdog) return;
+    QProcess *proc = m_carouselTimeoutTarget.take(watchdog);
+    watchdog->deleteLater();
+    if (!proc || !m_carouselTarget.contains(proc)) return; // already finished normally
+    m_carouselProcTimer.remove(proc);
+    debugLog("yt-dlp (carousel) timed out after 45s -- killing and failing the fetch");
+    proc->kill();
+    finishCarouselJob(proc, false);
 }
 
 void MediaManager::onCarouselYoutubeDlFinished(int exitCode, QProcess::ExitStatus exitStatus)
@@ -563,6 +586,13 @@ void MediaManager::finishCarouselJob(QProcess *proc, bool succeeded)
     QString instagramUrl = m_carouselTarget.take(proc);
     QString outPrefix = m_carouselOutPrefix.take(proc);
     QString baseUrl = carouselBaseUrl(instagramUrl);
+
+    QTimer *watchdog = m_carouselProcTimer.take(proc);
+    if (watchdog) {
+        m_carouselTimeoutTarget.remove(watchdog);
+        watchdog->stop();
+        watchdog->deleteLater();
+    }
 
     // Temporary diagnostic logging (carousel fetch bring-up) -- same
     // reasoning as finishYoutubeDlJob()'s: yt-dlp's own stdout/stderr is the
