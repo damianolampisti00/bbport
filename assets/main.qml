@@ -483,7 +483,27 @@ NavigationPane {
                     }
                 }
 
-                onCreationCompleted: {
+                // NOT started from onCreationCompleted: openInstagramCarousel()
+                // calls createObject() then assigns page.instagramUrl/
+                // firstSlideType/firstSlideUrl on the lines AFTER -- but
+                // Component.onCreationCompleted fires synchronously *during*
+                // createObject(), before any of those assignments happen (the
+                // exact same trap videoViewerPage's own onVideoUrlChanged
+                // comment already documents for videoUrl). Starting here
+                // meant instagramUrl was always still "" the moment this ran,
+                // so fetchInstagramCarousel("") hit its own first-line empty
+                // check and returned instantly with no fetch, no log, and no
+                // way to ever leave the loading state -- exactly the
+                // "schermo nero, caricamento a oltranza" symptom, confirmed
+                // by there being zero yt-dlp log output at all.
+                // firstSlideUrl is the LAST of the three properties the
+                // caller assigns, so reacting to its change (not
+                // instagramUrl's, set first) guarantees all three are
+                // already correct by the time this runs.
+                property bool startedLoading: false
+                onFirstSlideUrlChanged: {
+                    if (startedLoading) return;
+                    startedLoading = true;
                     carouselDataModel.append([{"type": firstSlideType, "url": firstSlideUrl}]);
                     refreshCurrentSlide();
                     var cached = mediaManager.fetchInstagramCarousel(instagramUrl);
