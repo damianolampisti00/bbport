@@ -518,10 +518,6 @@ NavigationPane {
                     }
                 }
 
-                attachedObjects: [
-                    ArrayDataModel { id: carouselDataModel }
-                ]
-
                 Container {
                     layout: DockLayout {}
                     background: Color.Black
@@ -653,6 +649,7 @@ NavigationPane {
                     }
 
                     attachedObjects: [
+                        ArrayDataModel { id: carouselDataModel },
                         NativeVideoPlayer {
                             id: carouselVideoPlayer
                         }
