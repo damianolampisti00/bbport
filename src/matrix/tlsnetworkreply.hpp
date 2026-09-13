@@ -44,6 +44,12 @@ public:
     // pending mbedtls_net_recv/send by closing the underlying socket.
     void requestAbort();
 
+    // Public (not just for run()'s own use) so the free helper functions in
+    // tlsnetworkreply.cpp's anonymous namespace (sslReadMore/ensureBytes) can
+    // poll it themselves between retries -- see the comment on sslReadMore
+    // for why relying on requestAbort()'s shutdown() alone wasn't enough.
+    bool wasAborted();
+
     int httpStatus;
     QByteArray responseBody;
     QNetworkReply::NetworkError netError;
@@ -53,8 +59,6 @@ protected:
     virtual void run();
 
 private:
-    bool wasAborted();
-
     QString m_method;
     QUrl m_url;
     QList<QPair<QByteArray, QByteArray> > m_headers;
@@ -73,6 +77,11 @@ public:
                      const QByteArray &outgoingData, QObject *parent = 0);
     virtual ~TlsNetworkReply();
 
+    // Actually starts the worker thread. Construction alone never does --
+    // TlsNetworkAccessManager decides when (immediately, or once a
+    // concurrency-limit slot frees up); see its createRequest().
+    void startWorker();
+
     virtual void abort();
     virtual qint64 bytesAvailable() const;
 
@@ -86,6 +95,7 @@ private:
     TlsRequestThread *m_worker;
     QByteArray m_buffer;
     qint64 m_readPos;
+    bool m_started;
 };
 
 #endif /* BBPORT_HAVE_NATIVE_TLS */

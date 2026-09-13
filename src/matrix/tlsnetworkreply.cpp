@@ -5,11 +5,13 @@
 #include <string.h>
 #include <stdio.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 
 #include <QMutexLocker>
 #include <QMetaObject>
 #include <QVariant>
 #include <QDebug>
+#include <QAtomicInt>
 
 #include "mbedtls/ssl.h"
 #include "mbedtls/entropy.h"
@@ -32,6 +34,19 @@ void appendDebugLog(const QString &line)
     fwrite(utf8.constData(), 1, utf8.size(), f);
     fclose(f);
 }
+
+// TEMPORARY diagnostic (see conversation): pinpoint which requests'
+// TlsRequestThread/TlsNetworkReply pair is never destroyed. Every create/
+// destroy logs the live count and the URL via qDebug (this reaches
+// Momentics' own console over the live debug connection, unlike
+// qWarning/slog2info -- see the comment above). If the live counts climb
+// without bound, whichever URL shows a "+thread"/"+reply" with no matching
+// "-thread"/"-reply" by the time it crashes is the leak; if instead every
+// create is matched by a destroy but the count is still huge at once, it's
+// an unbounded-concurrency burst (e.g. an unbatched key-query fan-out)
+// rather than a leak. Remove once the thread-count regression is fixed.
+QAtomicInt g_liveThreads(0);
+QAtomicInt g_liveReplies(0);
 }
 
 // Shared, read-only-after-init CA store (parsing tools/cacert.pem, bundled
@@ -80,13 +95,32 @@ QByteArray headerValue(const QList<QPair<QByteArray, QByteArray> > &headers, con
 
 // Reads whatever is available into `pending`, following mbedTLS's
 // want-read/want-write retry contract. Returns the number of bytes
-// appended, 0 on clean peer close, or a negative mbedtls error code.
-int sslReadMore(mbedtls_ssl_context *ssl, QByteArray &pending, bool *peerClosed)
+// appended, 0 on clean peer close (or on abort -- see below), or a negative
+// mbedtls error code.
+//
+// requestAbort() (called from another thread) is documented as unblocking a
+// pending read by shutdown()'ing the fd, but that alone isn't reliable
+// enough: a /sync long-poll sitting in this call is exactly the case most
+// likely to be mid-read when the watchdog times out, and if that particular
+// shutdown() doesn't actually interrupt the underlying blocking MsgReceive,
+// this loop retried WANT_READ forever and the thread never returned from
+// run() -- leaked permanently (root cause behind a Momentics debug session
+// showing 226 live threads and eventual bps_channel_create/bps_initialize
+// failures -- see conversation). Fixed by not trusting the cross-thread
+// nudge alone: run() now sets SO_RCVTIMEO on the socket once connected, so a
+// stalled read comes back WANT_READ/WANT_WRITE on its own on a bounded
+// cadence, and this thread checks its own abort flag right here before ever
+// retrying.
+int sslReadMore(mbedtls_ssl_context *ssl, QByteArray &pending, bool *peerClosed, TlsRequestThread *self)
 {
     unsigned char buf[4096];
     for (;;) {
         int n = mbedtls_ssl_read(ssl, buf, sizeof(buf));
         if (n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE) {
+            if (self->wasAborted()) {
+                *peerClosed = true;
+                return 0;
+            }
             continue;
         }
         if (n == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || n == 0) {
@@ -102,10 +136,10 @@ int sslReadMore(mbedtls_ssl_context *ssl, QByteArray &pending, bool *peerClosed)
 }
 
 // Ensures `pending` holds at least `needed` bytes, reading more as needed.
-bool ensureBytes(mbedtls_ssl_context *ssl, QByteArray &pending, int needed, bool *peerClosed)
+bool ensureBytes(mbedtls_ssl_context *ssl, QByteArray &pending, int needed, bool *peerClosed, TlsRequestThread *self)
 {
     while (pending.size() < needed) {
-        int n = sslReadMore(ssl, pending, peerClosed);
+        int n = sslReadMore(ssl, pending, peerClosed, self);
         if (n < 0 || *peerClosed) {
             return false;
         }
@@ -128,10 +162,14 @@ TlsRequestThread::TlsRequestThread(const QString &method, const QUrl &url,
         m_aborted(false)
 {
     mbedtls_net_init(&m_netCtx);
+    int n = g_liveThreads.fetchAndAddRelaxed(1) + 1;
+    qDebug() << "[BBport:tls] +thread" << m_method << m_url.toString() << "live=" << n;
 }
 
 TlsRequestThread::~TlsRequestThread()
 {
+    int n = g_liveThreads.fetchAndAddRelaxed(-1) - 1;
+    qDebug() << "[BBport:tls] -thread" << m_url.toString() << "live=" << n;
     mbedtls_net_free(&m_netCtx);
 }
 
@@ -236,6 +274,20 @@ void TlsRequestThread::run()
             }
             failed = true;
         }
+    }
+
+    if (!failed) {
+        // Bounds every later blocking read on this socket (handshake, HTTP
+        // response, and in particular a /sync long-poll) to a few seconds at
+        // a time, so a stalled read comes back MBEDTLS_ERR_SSL_WANT_READ on
+        // its own instead of blocking indefinitely -- see sslReadMore()'s
+        // comment for why this thread can no longer rely solely on
+        // requestAbort()'s cross-thread shutdown() to notice an abort.
+        struct timeval rcvTimeout;
+        rcvTimeout.tv_sec = 3;
+        rcvTimeout.tv_usec = 0;
+        setsockopt(m_netCtx.fd, SOL_SOCKET, SO_RCVTIMEO,
+                   reinterpret_cast<const char *>(&rcvTimeout), sizeof(rcvTimeout));
     }
 
     if (!failed) {
@@ -353,7 +405,7 @@ void TlsRequestThread::run()
                 failed = true;
                 break;
             }
-            int n = sslReadMore(&ssl, pending, &peerClosed);
+            int n = sslReadMore(&ssl, pending, &peerClosed, this);
             if (n < 0 || peerClosed) {
                 netError = wasAborted() ? QNetworkReply::OperationCanceledError
                                          : QNetworkReply::RemoteHostClosedError;
@@ -402,7 +454,7 @@ void TlsRequestThread::run()
                     int lineEnd;
                     bool ioError = false;
                     while ((lineEnd = pending.indexOf("\r\n")) < 0) {
-                        int n = sslReadMore(&ssl, pending, &peerClosed);
+                        int n = sslReadMore(&ssl, pending, &peerClosed, this);
                         if (n < 0 || peerClosed) { ioError = true; break; }
                     }
                     if (ioError) { failed = true; break; }
@@ -416,7 +468,7 @@ void TlsRequestThread::run()
                         for (;;) {
                             int te2;
                             while ((te2 = pending.indexOf("\r\n")) < 0) {
-                                int n = sslReadMore(&ssl, pending, &peerClosed);
+                                int n = sslReadMore(&ssl, pending, &peerClosed, this);
                                 if (n < 0 || peerClosed) { ioError = true; break; }
                             }
                             if (ioError) break;
@@ -427,12 +479,13 @@ void TlsRequestThread::run()
                         break;
                     }
 
-                    if (!ensureBytes(&ssl, pending, chunkSize + 2, &peerClosed)) { failed = true; break; }
+                    if (!ensureBytes(&ssl, pending, chunkSize + 2, &peerClosed, this)) { failed = true; break; }
                     body += pending.left(chunkSize);
                     pending.remove(0, chunkSize + 2);
                 }
                 if (failed) {
-                    netError = QNetworkReply::RemoteHostClosedError;
+                    netError = wasAborted() ? QNetworkReply::OperationCanceledError
+                                             : QNetworkReply::RemoteHostClosedError;
                     netErrorString = "Connection interrupted during chunked body.";
                 }
             } else if (!cl.isEmpty()) {
@@ -446,8 +499,9 @@ void TlsRequestThread::run()
                     netError = QNetworkReply::ProtocolFailure;
                     netErrorString = "Invalid Content-Length.";
                     failed = true;
-                } else if (!ensureBytes(&ssl, pending, len, &peerClosed)) {
-                    netError = QNetworkReply::RemoteHostClosedError;
+                } else if (!ensureBytes(&ssl, pending, len, &peerClosed, this)) {
+                    netError = wasAborted() ? QNetworkReply::OperationCanceledError
+                                             : QNetworkReply::RemoteHostClosedError;
                     netErrorString = "Connection interrupted before end of body.";
                     failed = true;
                 } else {
@@ -457,8 +511,16 @@ void TlsRequestThread::run()
                 body = pending;
                 bool readError = false;
                 for (;;) {
-                    int n = sslReadMore(&ssl, body, &peerClosed);
-                    if (peerClosed) break; // expected/correct end of a read-until-close body
+                    int n = sslReadMore(&ssl, body, &peerClosed, this);
+                    if (peerClosed) {
+                        // sslReadMore() also reports an abort through
+                        // peerClosed (see its comment) -- treat that as a
+                        // real failure, not a clean end of body, or an
+                        // aborted request would silently "succeed" with a
+                        // truncated body instead of reporting cancellation.
+                        if (wasAborted()) readError = true;
+                        break;
+                    }
                     if (n < 0) { readError = true; break; }
                 }
                 if (readError) {
@@ -466,7 +528,8 @@ void TlsRequestThread::run()
                     // alert mid-stream, ...) previously fell through this
                     // same "|| n <= 0" break as a clean close, silently
                     // returning a truncated body marked as success.
-                    netError = QNetworkReply::RemoteHostClosedError;
+                    netError = wasAborted() ? QNetworkReply::OperationCanceledError
+                                             : QNetworkReply::RemoteHostClosedError;
                     netErrorString = "Connection interrupted while reading body.";
                     failed = true;
                 }
@@ -530,7 +593,8 @@ TlsNetworkReply::TlsNetworkReply(QNetworkAccessManager::Operation op, const QNet
                                   const QByteArray &outgoingData, QObject *parent) :
         QNetworkReply(parent),
         m_worker(0),
-        m_readPos(0)
+        m_readPos(0),
+        m_started(false)
 {
     setOperation(op);
     setRequest(request);
@@ -557,23 +621,51 @@ TlsNetworkReply::TlsNetworkReply(QNetworkAccessManager::Operation op, const QNet
         default: method = "GET"; break;
     }
 
+    // Construction only builds the worker -- it does NOT start() it. Whether
+    // this reply runs immediately or waits its turn is TlsNetworkAccessManager's
+    // call (see its createRequest()/dispatchQueued()): letting every reply
+    // start unconditionally here is exactly what let an unbounded burst of
+    // sendToDevice/thumbnail requests during a busy sync pile up hundreds of
+    // simultaneous TLS handshakes/threads and take the process down -- see
+    // conversation.
     m_worker = new TlsRequestThread(method, request.url(), headers, outgoingData, this);
     connect(m_worker, SIGNAL(finished()), this, SLOT(onWorkerFinished()));
-    m_worker->start();
+
+    int n = g_liveReplies.fetchAndAddRelaxed(1) + 1;
+    qDebug() << "[BBport:tls] +reply" << method << request.url().toString() << "live=" << n;
 }
 
 TlsNetworkReply::~TlsNetworkReply()
 {
+    int n = g_liveReplies.fetchAndAddRelaxed(-1) - 1;
+    qDebug() << "[BBport:tls] -reply" << url().toString() << "live=" << n;
     if (m_worker) {
         m_worker->requestAbort();
         m_worker->wait();
     }
 }
 
+void TlsNetworkReply::startWorker()
+{
+    if (!m_worker || m_started) return;
+    m_started = true;
+    m_worker->start();
+}
+
 void TlsNetworkReply::abort()
 {
     if (m_worker) {
         m_worker->requestAbort();
+    }
+    if (!m_started) {
+        // Still sitting in TlsNetworkAccessManager's pending queue -- nothing
+        // is running that will ever call onWorkerFinished()/emit finished()
+        // on its own, so this has to do it here or the reply (and its queue
+        // slot) would never be released.
+        m_started = true;
+        setError(QNetworkReply::OperationCanceledError, "Aborted before starting.");
+        setFinished(true);
+        emit finished();
     }
 }
 
@@ -596,6 +688,9 @@ qint64 TlsNetworkReply::readData(char *data, qint64 maxlen)
 
 void TlsNetworkReply::onWorkerFinished()
 {
+    qDebug() << "[BBport:tls] worker finished" << url().toString()
+              << "status=" << m_worker->httpStatus << "err=" << int(m_worker->netError);
+
     setError(m_worker->netError, m_worker->netErrorString);
     setAttribute(QNetworkRequest::HttpStatusCodeAttribute, m_worker->httpStatus);
     m_buffer = m_worker->responseBody;
