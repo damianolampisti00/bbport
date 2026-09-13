@@ -2,6 +2,7 @@
 #include "matrixapi.hpp"
 #include "keybackupmanager.hpp"
 #include "olmcryptomanager.hpp"
+#include "bbportlog.hpp"
 
 #include <bb/data/JsonDataAccess>
 
@@ -264,7 +265,7 @@ void SyncEngine::doSync()
         // Beeper's server closing one of the two connections outright is
         // the likely source of some of the RemoteHostClosedError retries
         // seen alongside it -- see conversation.
-        qDebug() << "[BBport:sync] doSync() called while already in flight -- ignoring duplicate";
+        bbportLog("[BBport:sync] doSync() called while already in flight -- ignoring duplicate");
         return;
     }
 
@@ -283,7 +284,7 @@ void SyncEngine::doSync()
     m_cycleStartMs = QDateTime::currentMSecsSinceEpoch();
     m_cycleDecryptOk = 0;
     m_cycleDecryptFailed = 0;
-    qDebug() << "[BBport:sync] starting" << (m_since.isEmpty() ? "full" : "incremental");
+    bbportLog(QString("[BBport:sync] starting %1").arg(m_since.isEmpty() ? "full" : "incremental"));
 
     m_currentReply = m_api->apiGet("/sync", query);
     connect(m_currentReply, SIGNAL(finished()), this, SLOT(onSyncReplyFinished()));
@@ -292,7 +293,7 @@ void SyncEngine::doSync()
 
 void SyncEngine::onWatchdogTimeout()
 {
-    qDebug() << "[BBport:sync] watchdog fired -- aborting the in-flight /sync";
+    bbportLog("[BBport:sync] watchdog fired -- aborting the in-flight /sync");
     if (m_currentReply) {
         m_currentReply->abort();
     }
@@ -322,12 +323,12 @@ void SyncEngine::onSyncReplyFinished()
             // Our own watchdog aborting a long-poll that ran past its
             // timeout -- a normal part of the /sync cycle, not a failure,
             // so retry immediately and don't touch the backoff streak.
-            qDebug() << "[BBport:sync] long-poll timed out after" << elapsedMs << "ms (normal), retrying";
+            bbportLog(QString("[BBport:sync] long-poll timed out after %1 ms (normal), retrying").arg(elapsedMs));
             doSync();
             return;
         }
-        qDebug() << "[BBport:sync] FAILED after" << elapsedMs << "ms netError=" << int(netError)
-                  << "backoffMs=" << m_retryBackoffMs;
+        bbportLog(QString("[BBport:sync] FAILED after %1 ms netError=%2 backoffMs=%3")
+                      .arg(elapsedMs).arg(int(netError)).arg(m_retryBackoffMs));
         emit syncError("Sync failed: invalid response from server.");
         // A genuine failure (network error, bad JSON, server error): retry
         // with exponential backoff instead of immediately, so a lost/flaky
@@ -383,11 +384,10 @@ void SyncEngine::onSyncReplyFinished()
         emit initialSyncCompleted();
     }
 
-    qDebug() << "[BBport:sync] ok in" << elapsedMs << "ms"
-              << "joinedRoomsWithActivity=" << roomsObj.value("join").toMap().size()
-              << "invites=" << roomsObj.value("invite").toMap().size()
-              << "toDeviceEvents=" << toDeviceEvents.size()
-              << "decryptOk=" << m_cycleDecryptOk << "decryptFailed=" << m_cycleDecryptFailed;
+    bbportLog(QString("[BBport:sync] ok in %1 ms joinedRoomsWithActivity=%2 invites=%3 toDeviceEvents=%4 decryptOk=%5 decryptFailed=%6")
+                  .arg(elapsedMs).arg(roomsObj.value("join").toMap().size())
+                  .arg(roomsObj.value("invite").toMap().size()).arg(toDeviceEvents.size())
+                  .arg(m_cycleDecryptOk).arg(m_cycleDecryptFailed));
 
     doSync();
 }

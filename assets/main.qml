@@ -381,8 +381,6 @@ NavigationPane {
                 property string firstSlideUrl: ""
                 property bool loadingMore: true
                 property bool loadError: false
-                property real viewportWidth: 0
-                property real viewportHeight: 0
 
                 onCreationCompleted: {
                     carouselDataModel.append([{"type": firstSlideType, "url": firstSlideUrl}]);
@@ -420,15 +418,6 @@ NavigationPane {
                     horizontalAlignment: HorizontalAlignment.Fill
                     verticalAlignment: VerticalAlignment.Fill
 
-                    attachedObjects: [
-                        LayoutUpdateHandler {
-                            onLayoutFrameChanged: {
-                                if (layoutFrame.width > 0) viewportWidth = layoutFrame.width;
-                                if (layoutFrame.height > 0) viewportHeight = layoutFrame.height;
-                            }
-                        }
-                    ]
-
                     // Trial: a horizontal (LeftToRight) StackListLayout for a
                     // swipeable gallery is untested in this Cascades build --
                     // every other ListView in this app is the default
@@ -456,8 +445,20 @@ NavigationPane {
                             ListItemComponent {
                                 type: ""
                                 Container {
-                                    preferredWidth: viewportWidth > 0 ? viewportWidth : 720
-                                    preferredHeight: viewportHeight > 0 ? viewportHeight : 1280
+                                    // A ListItemComponent's delegate is an
+                                    // isolated context -- confirmed on-device
+                                    // (asset:///main.qml ReferenceError:
+                                    // Can't find variable) that it cannot see
+                                    // a plain property declared on the
+                                    // enclosing Page (viewportWidth/Height,
+                                    // an earlier attempt at exact pixel
+                                    // sizing here). Fill matches every other
+                                    // full-bleed Container in this app and
+                                    // needs no cross-scope value at all --
+                                    // the ListView's own width/height already
+                                    // is the viewport.
+                                    horizontalAlignment: HorizontalAlignment.Fill
+                                    verticalAlignment: VerticalAlignment.Fill
                                     layout: DockLayout {}
                                     background: Color.create("#1a2026")
                                     ImageView {

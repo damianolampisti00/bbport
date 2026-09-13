@@ -1,4 +1,5 @@
 #include "tlsnetworkreply.hpp"
+#include "bbportlog.hpp"
 
 #ifdef BBPORT_HAVE_NATIVE_TLS
 
@@ -165,13 +166,13 @@ TlsRequestThread::TlsRequestThread(const QString &method, const QUrl &url,
 {
     mbedtls_net_init(&m_netCtx);
     int n = g_liveThreads.fetchAndAddRelaxed(1) + 1;
-    qDebug() << "[BBport:tls] +thread" << m_method << m_url.toString() << "live=" << n;
+    bbportLog(QString("[BBport:tls] +thread %1 %2 live=%3").arg(m_method, m_url.toString()).arg(n));
 }
 
 TlsRequestThread::~TlsRequestThread()
 {
     int n = g_liveThreads.fetchAndAddRelaxed(-1) - 1;
-    qDebug() << "[BBport:tls] -thread" << m_url.toString() << "live=" << n;
+    bbportLog(QString("[BBport:tls] -thread %1 live=%2").arg(m_url.toString()).arg(n));
     mbedtls_net_free(&m_netCtx);
 }
 
@@ -646,13 +647,13 @@ TlsNetworkReply::TlsNetworkReply(QNetworkAccessManager::Operation op, const QNet
     connect(m_worker, SIGNAL(finished()), this, SLOT(onWorkerFinished()));
 
     int n = g_liveReplies.fetchAndAddRelaxed(1) + 1;
-    qDebug() << "[BBport:tls] +reply" << method << request.url().toString() << "live=" << n;
+    bbportLog(QString("[BBport:tls] +reply %1 %2 live=%3").arg(method, request.url().toString()).arg(n));
 }
 
 TlsNetworkReply::~TlsNetworkReply()
 {
     int n = g_liveReplies.fetchAndAddRelaxed(-1) - 1;
-    qDebug() << "[BBport:tls] -reply" << url().toString() << "live=" << n;
+    bbportLog(QString("[BBport:tls] -reply %1 live=%2").arg(url().toString()).arg(n));
     if (m_worker) {
         m_worker->requestAbort();
         m_worker->wait();
@@ -702,8 +703,8 @@ qint64 TlsNetworkReply::readData(char *data, qint64 maxlen)
 
 void TlsNetworkReply::onWorkerFinished()
 {
-    qDebug() << "[BBport:tls] worker finished" << url().toString()
-              << "status=" << m_worker->httpStatus << "err=" << int(m_worker->netError);
+    bbportLog(QString("[BBport:tls] worker finished %1 status=%2 err=%3")
+                  .arg(url().toString()).arg(m_worker->httpStatus).arg(int(m_worker->netError)));
 
     setError(m_worker->netError, m_worker->netErrorString);
     setAttribute(QNetworkRequest::HttpStatusCodeAttribute, m_worker->httpStatus);

@@ -3,10 +3,10 @@
 #ifdef BBPORT_HAVE_NATIVE_TLS
 
 #include "tlsnetworkreply.hpp"
+#include "bbportlog.hpp"
 
 #include <QUrl>
 #include <QNetworkRequest>
-#include <QDebug>
 
 namespace {
 // Not tuned beyond "clearly bigger than one, clearly smaller than the
@@ -51,8 +51,8 @@ QNetworkReply* TlsNetworkAccessManager::createRequest(Operation op, const QNetwo
         // during real usage is what tells us whether kMaxConcurrentTlsRequests
         // is actually a bottleneck (e.g. media-heavy rooms loading slowly)
         // or comfortably sized.
-        qDebug() << "[BBport:tls] queued (cap reached)" << request.url().toString()
-                  << "pending=" << m_pending.size() << "active=" << m_activeCount;
+        bbportLog(QString("[BBport:tls] queued (cap reached) %1 pending=%2 active=%3")
+                      .arg(request.url().toString()).arg(m_pending.size()).arg(m_activeCount));
     }
     return reply;
 }

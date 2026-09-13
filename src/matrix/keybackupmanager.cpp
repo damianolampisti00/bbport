@@ -1,6 +1,7 @@
 #include "keybackupmanager.hpp"
 #include "matrixapi.hpp"
 #include "base58.hpp"
+#include "bbportlog.hpp"
 
 #include <bb/data/JsonDataAccess>
 
@@ -136,7 +137,7 @@ void KeyBackupManager::setLastError(const QString &error)
     // failure) previously had zero visible feedback, silently leaving key
     // backup permanently locked for the whole session with no clue why.
     if (!error.isEmpty()) {
-        qDebug() << "[BBport:keybackup]" << error;
+        bbportLog(QString("[BBport:keybackup] %1").arg(error));
     }
     m_lastError = error;
     emit lastErrorChanged();
@@ -395,7 +396,7 @@ void KeyBackupManager::onVersionReplyFinished()
     // overwriting it, so there's nothing here that actually needs a clean
     // slate.
     m_unlocked = true;
-    qDebug() << "[BBport:keybackup] unlocked, backup version=" << m_backupVersion;
+    bbportLog(QString("[BBport:keybackup] unlocked, backup version=%1").arg(m_backupVersion));
     emit unlockedChanged();
 }
 
