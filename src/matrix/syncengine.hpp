@@ -138,6 +138,15 @@ private:
     // tight loop that would otherwise hammer the radio and CPU continuously.
     int m_retryBackoffMs;
 
+    // General runtime instrumentation (see conversation): timing/counts for
+    // the current sync cycle, logged via qDebug in onSyncReplyFinished() so
+    // a real usage session can be reviewed afterward for anomalies (a cycle
+    // taking far longer than expected, a spike in decrypt failures, ...)
+    // without needing to reproduce anything live.
+    qint64 m_cycleStartMs;
+    int m_cycleDecryptOk;
+    int m_cycleDecryptFailed;
+
     // Per-room cached metadata used to build the summaries emitted via
     // roomUpdated (explicit name wins over heuristic 1:1 naming).
     QHash<QString, QVariantMap> m_roomMeta;

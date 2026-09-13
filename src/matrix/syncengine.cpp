@@ -12,6 +12,8 @@
 #include <QDir>
 #include <QMapIterator>
 #include <QHashIterator>
+#include <QDateTime>
+#include <QDebug>
 
 using namespace bb::data;
 
@@ -128,7 +130,10 @@ SyncEngine::SyncEngine(MatrixApi *api, KeyBackupManager *keyBackup, OlmCryptoMan
         m_initialSyncDone(false),
         m_currentReply(0),
         m_watchdog(new QTimer(this)),
-        m_retryBackoffMs(0)
+        m_retryBackoffMs(0),
+        m_cycleStartMs(0),
+        m_cycleDecryptOk(0),
+        m_cycleDecryptFailed(0)
 {
     m_watchdog->setSingleShot(true);
     connect(m_watchdog, SIGNAL(timeout()), this, SLOT(onWatchdogTimeout()));
@@ -262,6 +267,11 @@ void SyncEngine::doSync()
         query["timeout"] = QString::number(kSyncTimeoutMs);
     }
 
+    m_cycleStartMs = QDateTime::currentMSecsSinceEpoch();
+    m_cycleDecryptOk = 0;
+    m_cycleDecryptFailed = 0;
+    qDebug() << "[BBport:sync] starting" << (m_since.isEmpty() ? "full" : "incremental");
+
     m_currentReply = m_api->apiGet("/sync", query);
     connect(m_currentReply, SIGNAL(finished()), this, SLOT(onSyncReplyFinished()));
     m_watchdog->start((m_since.isEmpty() ? kFirstSyncTimeoutMs : kSyncTimeoutMs) + kWatchdogGraceMs);
@@ -269,6 +279,7 @@ void SyncEngine::doSync()
 
 void SyncEngine::onWatchdogTimeout()
 {
+    qDebug() << "[BBport:sync] watchdog fired -- aborting the in-flight /sync";
     if (m_currentReply) {
         m_currentReply->abort();
     }
@@ -291,14 +302,19 @@ void SyncEngine::onSyncReplyFinished()
 
     if (!m_running) return;
 
+    qint64 elapsedMs = QDateTime::currentMSecsSinceEpoch() - m_cycleStartMs;
+
     if (!ok) {
         if (netError == QNetworkReply::OperationCanceledError) {
             // Our own watchdog aborting a long-poll that ran past its
             // timeout -- a normal part of the /sync cycle, not a failure,
             // so retry immediately and don't touch the backoff streak.
+            qDebug() << "[BBport:sync] long-poll timed out after" << elapsedMs << "ms (normal), retrying";
             doSync();
             return;
         }
+        qDebug() << "[BBport:sync] FAILED after" << elapsedMs << "ms netError=" << int(netError)
+                  << "backoffMs=" << m_retryBackoffMs;
         emit syncError("Sync failed: invalid response from server.");
         // A genuine failure (network error, bad JSON, server error): retry
         // with exponential backoff instead of immediately, so a lost/flaky
@@ -353,6 +369,12 @@ void SyncEngine::onSyncReplyFinished()
         m_initialSyncDone = true;
         emit initialSyncCompleted();
     }
+
+    qDebug() << "[BBport:sync] ok in" << elapsedMs << "ms"
+              << "joinedRoomsWithActivity=" << roomsObj.value("join").toMap().size()
+              << "invites=" << roomsObj.value("invite").toMap().size()
+              << "toDeviceEvents=" << toDeviceEvents.size()
+              << "decryptOk=" << m_cycleDecryptOk << "decryptFailed=" << m_cycleDecryptFailed;
 
     doSync();
 }
@@ -581,7 +603,10 @@ void SyncEngine::processJoinedRoom(const QString &roomId, const QVariantMap &roo
                 }
             }
 
-            if (!decrypted) {
+            if (decrypted) {
+                ++m_cycleDecryptOk;
+            } else {
+                ++m_cycleDecryptFailed;
                 QVariantMap outEvent;
                 outEvent["eventId"] = eventId;
                 outEvent["sender"] = sender;

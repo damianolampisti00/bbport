@@ -6,6 +6,7 @@
 
 #include <QUrl>
 #include <QNetworkRequest>
+#include <QDebug>
 
 namespace {
 // Not tuned beyond "clearly bigger than one, clearly smaller than the
@@ -45,6 +46,13 @@ QNetworkReply* TlsNetworkAccessManager::createRequest(Operation op, const QNetwo
         reply->startWorker();
     } else {
         m_pending.append(reply);
+        // General runtime instrumentation (see conversation): the cap only
+        // ever bites when this fires, so seeing how deep the queue gets
+        // during real usage is what tells us whether kMaxConcurrentTlsRequests
+        // is actually a bottleneck (e.g. media-heavy rooms loading slowly)
+        // or comfortably sized.
+        qDebug() << "[BBport:tls] queued (cap reached)" << request.url().toString()
+                  << "pending=" << m_pending.size() << "active=" << m_activeCount;
     }
     return reply;
 }
