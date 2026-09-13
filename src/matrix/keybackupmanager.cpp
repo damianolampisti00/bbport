@@ -19,6 +19,7 @@ extern "C" {
 #include <QUrl>
 #include <QStringList>
 #include <QFile>
+#include <QDebug>
 #include <cstdlib>
 #include <cstring>
 
@@ -128,6 +129,15 @@ void KeyBackupManager::setBusy(bool busy)
 
 void KeyBackupManager::setLastError(const QString &error)
 {
+    // General runtime instrumentation (see conversation): every unlock()
+    // failure path already builds a specific, detailed error string here,
+    // but nothing in main.qml ever displays lastError or reacts to
+    // unlockFailed -- a wrong/mismatched Recovery Key (or any other unlock
+    // failure) previously had zero visible feedback, silently leaving key
+    // backup permanently locked for the whole session with no clue why.
+    if (!error.isEmpty()) {
+        qDebug() << "[BBport:keybackup]" << error;
+    }
     m_lastError = error;
     emit lastErrorChanged();
 }
@@ -377,6 +387,7 @@ void KeyBackupManager::onVersionReplyFinished()
     // overwriting it, so there's nothing here that actually needs a clean
     // slate.
     m_unlocked = true;
+    qDebug() << "[BBport:keybackup] unlocked, backup version=" << m_backupVersion;
     emit unlockedChanged();
 }
 

@@ -254,6 +254,19 @@ void SyncEngine::loadRoomCache()
 void SyncEngine::doSync()
 {
     if (!m_running) return;
+    if (m_currentReply) {
+        // A stray/reentrant call while one is already in flight (observed
+        // in a real console log as two simultaneous /sync requests sharing
+        // the identical `since` token -- root cause not pinned down, but
+        // every legitimate call path here already runs only after
+        // onSyncReplyFinished() has reset m_currentReply to 0, so this can
+        // only fire on a genuine duplicate call, never a normal one).
+        // Beeper's server closing one of the two connections outright is
+        // the likely source of some of the RemoteHostClosedError retries
+        // seen alongside it -- see conversation.
+        qDebug() << "[BBport:sync] doSync() called while already in flight -- ignoring duplicate";
+        return;
+    }
 
     QVariantMap query;
     if (m_since.isEmpty()) {
