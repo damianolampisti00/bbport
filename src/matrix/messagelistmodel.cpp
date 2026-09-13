@@ -167,6 +167,8 @@ MessageListModel::MessageListModel(MatrixApi *api, TimelineStore *store, MediaMa
     connect(m_media, SIGNAL(thumbnailReady(QString,QString)), this, SLOT(onThumbnailReady(QString,QString)));
     connect(m_media, SIGNAL(instagramVideoReady(QString,QString)), this, SLOT(onInstagramVideoReady(QString,QString)));
     connect(m_media, SIGNAL(instagramVideoFailed(QString)), this, SLOT(onInstagramVideoFailed(QString)));
+    connect(m_media, SIGNAL(instagramCarouselReady(QString,QVariantList)), this, SLOT(onInstagramCarouselReady(QString,QVariantList)));
+    connect(m_media, SIGNAL(instagramCarouselFailed(QString)), this, SLOT(onInstagramCarouselFailed(QString)));
     connect(m_media, SIGNAL(uploadFinished(QString,QString,QString,bool)), this, SLOT(onUploadFinished(QString,QString,QString,bool)));
     connect(m_olmCrypto, SIGNAL(sendSucceeded(QString)), this, SLOT(onEncryptedSendSucceeded(QString)));
     connect(m_olmCrypto, SIGNAL(sendFailed(QString,QString)), this, SLOT(onEncryptedSendFailed(QString,QString)));
@@ -625,6 +627,42 @@ void MessageListModel::onInstagramVideoFailed(const QString &instagramUrl)
     m_instagramVideoResult["localFileUrl"] = QString();
     emit instagramVideoResultChanged();
 }
+
+void MessageListModel::onInstagramCarouselReady(const QString &instagramUrl, const QVariantList &items)
+{
+    QString eventId;
+    for (int i = 0; i < m_model->size(); ++i) {
+        const QVariantMap item = m_model->value(i).toMap();
+        if (item.value("instagramUrl").toString() == instagramUrl) {
+            eventId = item.value("eventId").toString();
+            break;
+        }
+    }
+    m_instagramCarouselResult["ok"] = true;
+    m_instagramCarouselResult["eventId"] = eventId;
+    m_instagramCarouselResult["instagramUrl"] = instagramUrl;
+    m_instagramCarouselResult["items"] = items;
+    emit instagramCarouselResultChanged();
+}
+
+void MessageListModel::onInstagramCarouselFailed(const QString &instagramUrl)
+{
+    QString eventId;
+    for (int i = 0; i < m_model->size(); ++i) {
+        const QVariantMap item = m_model->value(i).toMap();
+        if (item.value("instagramUrl").toString() == instagramUrl) {
+            eventId = item.value("eventId").toString();
+            break;
+        }
+    }
+    m_instagramCarouselResult["ok"] = false;
+    m_instagramCarouselResult["eventId"] = eventId;
+    m_instagramCarouselResult["instagramUrl"] = instagramUrl;
+    m_instagramCarouselResult["items"] = QVariantList();
+    emit instagramCarouselResultChanged();
+}
+
+QVariantMap MessageListModel::instagramCarouselResult() const { return m_instagramCarouselResult; }
 
 QVariantMap MessageListModel::replyTarget() const { return m_replyTarget; }
 

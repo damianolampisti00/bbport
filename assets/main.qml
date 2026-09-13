@@ -96,6 +96,21 @@ NavigationPane {
         navigationPane.push(page);
     }
 
+    // firstSlideUrl is the one slide already available locally (the exact
+    // image/video that was actually shared into the chat) -- shown
+    // immediately so the gallery never opens to a blank/loading screen,
+    // while MediaManager::fetchInstagramCarousel() (kicked off by the
+    // caller, not here) fills in the rest of the carousel in the
+    // background. See conversation for why carousel-slide shares need this
+    // separate gallery instead of the plain single-image viewer.
+    function openInstagramCarousel(instagramUrl, firstSlideType, firstSlideUrl) {
+        var page = carouselViewerPage.createObject();
+        page.instagramUrl = instagramUrl;
+        page.firstSlideType = firstSlideType;
+        page.firstSlideUrl = firstSlideUrl;
+        navigationPane.push(page);
+    }
+
     function openVideo(localUrl, durationMs, videoWidth, videoHeight) {
         var page = videoViewerPage.createObject();
         page.durationMs = durationMs > 0 ? durationMs : 0;
@@ -355,6 +370,161 @@ NavigationPane {
             }
         },
         ComponentDefinition {
+            id: carouselViewerPage
+            Page {
+                property string instagramUrl: ""
+                // The one slide already available locally (see
+                // openInstagramCarousel()'s doc comment) -- shown as the
+                // gallery's first item immediately, before the background
+                // fetch below can possibly resolve.
+                property string firstSlideType: "image"
+                property string firstSlideUrl: ""
+                property bool loadingMore: true
+                property bool loadError: false
+                property real viewportWidth: 0
+                property real viewportHeight: 0
+
+                onCreationCompleted: {
+                    carouselDataModel.append([{"type": firstSlideType, "url": firstSlideUrl}]);
+                    var cached = mediaManager.fetchInstagramCarousel(instagramUrl);
+                    if (cached && cached.length > 0) {
+                        loadingMore = false;
+                        carouselDataModel.clear();
+                        carouselDataModel.append(cached);
+                    }
+                }
+
+                // Same "property mirror" pattern as conversationPage's
+                // reelWatcher: a freshly created page picks up whatever
+                // result is already sitting on messageListModel from a
+                // previous carousel fetch (this or a different post), so
+                // the instagramUrl match below (not just loadingMore) is
+                // what keeps a stale result from a DIFFERENT post from
+                // overwriting this page's slides.
+                property variant carouselWatcher: messageListModel.instagramCarouselResult
+                onCarouselWatcherChanged: {
+                    if (!loadingMore) return;
+                    if (carouselWatcher.instagramUrl !== instagramUrl) return;
+                    loadingMore = false;
+                    if (carouselWatcher.ok && carouselWatcher.items && carouselWatcher.items.length > 0) {
+                        carouselDataModel.clear();
+                        carouselDataModel.append(carouselWatcher.items);
+                    } else {
+                        loadError = true;
+                    }
+                }
+
+                Container {
+                    layout: DockLayout {}
+                    background: Color.Black
+                    horizontalAlignment: HorizontalAlignment.Fill
+                    verticalAlignment: VerticalAlignment.Fill
+
+                    attachedObjects: [
+                        LayoutUpdateHandler {
+                            onLayoutFrameChanged: {
+                                if (layoutFrame.width > 0) viewportWidth = layoutFrame.width;
+                                if (layoutFrame.height > 0) viewportHeight = layoutFrame.height;
+                            }
+                        }
+                    ]
+
+                    // Trial: a horizontal (LeftToRight) StackListLayout for a
+                    // swipeable gallery is untested in this Cascades build --
+                    // every other ListView in this app is the default
+                    // vertical orientation. Revert to a plain vertical
+                    // ListView (one slide per row, scroll down instead of
+                    // sideways -- still lets you "scorrere" through them,
+                    // just not side-to-side) if this doesn't render/scroll
+                    // correctly on-device. NOT a Container+Repeater: Cascades
+                    // QML1 doesn't support Repeater inside a Container at all
+                    // (see MessageBubbleContent.qml's reaction-pills comment)
+                    // -- ListView+ArrayDataModel is the only dynamic-list
+                    // mechanism proven to work anywhere in this app.
+                    ListView {
+                        horizontalAlignment: HorizontalAlignment.Fill
+                        verticalAlignment: VerticalAlignment.Fill
+                        layout: StackListLayout { orientation: LayoutOrientation.LeftToRight }
+                        dataModel: ArrayDataModel { id: carouselDataModel }
+                        onTriggered: {
+                            var item = dataModel.data(indexPath);
+                            if (item && item.type === "video") {
+                                mediaManager.openVideoExternally(item.url);
+                            }
+                        }
+                        listItemComponents: [
+                            ListItemComponent {
+                                type: ""
+                                Container {
+                                    preferredWidth: viewportWidth > 0 ? viewportWidth : 720
+                                    preferredHeight: viewportHeight > 0 ? viewportHeight : 1280
+                                    layout: DockLayout {}
+                                    background: Color.create("#1a2026")
+                                    ImageView {
+                                        visible: ListItemData.type !== "video"
+                                        imageSource: ListItemData.url
+                                        scalingMethod: ScalingMethod.AspectFit
+                                        horizontalAlignment: HorizontalAlignment.Center
+                                        verticalAlignment: VerticalAlignment.Center
+                                    }
+                                    // Video slides: yt-dlp already downloaded the real
+                                    // playable file (unlike a Reel share, which never
+                                    // gets one -- see
+                                    // MediaManager::fetchInstagramCarousel()), but
+                                    // there's no separately-extracted poster frame to
+                                    // show as a static preview, so this is a plain tap
+                                    // target (via the ListView's own onTriggered above,
+                                    // not a handler nested in here -- interactive
+                                    // elements nested inside a ListItemComponent have
+                                    // repeatedly proven unreliable in this Cascades
+                                    // build, same reasoning as hiddenChatsListView).
+                                    Label {
+                                        visible: ListItemData.type === "video"
+                                        text: "▶ Tocca per riprodurre"
+                                        horizontalAlignment: HorizontalAlignment.Center
+                                        verticalAlignment: VerticalAlignment.Center
+                                        textStyle.color: Color.White
+                                        textStyle.fontSize: FontSize.XLarge
+                                    }
+                                }
+                            }
+                        ]
+                    }
+
+                    Container {
+                        visible: loadingMore
+                        horizontalAlignment: HorizontalAlignment.Center
+                        verticalAlignment: VerticalAlignment.Bottom
+                        bottomMargin: ui.du(3)
+                        layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
+                        background: Color.create("#cc1a2026")
+                        leftPadding: ui.du(1.5); rightPadding: ui.du(1.5)
+                        topPadding: ui.du(0.8); bottomPadding: ui.du(0.8)
+                        ActivityIndicator {
+                            running: loadingMore
+                            preferredWidth: ui.du(3); preferredHeight: ui.du(3)
+                            rightMargin: ui.du(1)
+                        }
+                        Label {
+                            text: "Caricamento carosello..."
+                            textStyle.color: Color.White
+                            verticalAlignment: VerticalAlignment.Center
+                        }
+                    }
+
+                    Label {
+                        visible: loadError
+                        text: "Impossibile caricare le altre foto/video di questo post."
+                        horizontalAlignment: HorizontalAlignment.Center
+                        verticalAlignment: VerticalAlignment.Bottom
+                        bottomMargin: ui.du(3)
+                        textStyle.color: Color.create("#ff6b6b")
+                        multiline: true
+                    }
+                }
+            }
+        },
+        ComponentDefinition {
             id: conversationPage
             Page {
                 property string contactName: ""
@@ -497,15 +667,52 @@ NavigationPane {
                             onTriggered: {
                                 var item = dataModel.data(indexPath);
                                 if (!item) return;
-                                if (item.instagramUrl && item.instagramUrl.length > 0) {
-                                    // Reel/post from the Instagram bridge: only ever a
-                                    // thumbnail + this link, never a real video (see
-                                    // extractMediaFields() in syncengine.cpp/
-                                    // messagelistmodel.cpp). fetchInstagramVideo()
-                                    // returns a "file://" path immediately if already
-                                    // cached from a previous tap; otherwise it starts
-                                    // the fetch and messageListModel.instagramVideoResult
-                                    // (watched below) fires once it's ready.
+                                // instagramUrl is set for BOTH Reels and regular posts/
+                                // carousel-slide shares (see extractMediaFields() in
+                                // syncengine.cpp/messagelistmodel.cpp) but only a Reel
+                                // (.../reel/...) is ever bridged as a thumbnail-only
+                                // placeholder with no real video -- a post or carousel
+                                // slide (.../p/...) already carries its real image/video
+                                // as normal E2EE media, mediaLocalUrl included, exactly
+                                // like any other message (confirmed against real bridge
+                                // payloads -- see conversation). Checking instagramUrl
+                                // before mediaLocalUrl used to route every Instagram
+                                // share -- posts included -- through the yt-dlp scrape
+                                // flow below, so a plain shared photo could never be
+                                // opened fullscreen like a normal image.
+                                var isReel = item.instagramUrl && item.instagramUrl.length > 0
+                                        && item.instagramUrl.indexOf("/reel/") >= 0;
+                                // Instagram's own share action puts this query
+                                // parameter on the link only when the user shared one
+                                // specific slide from WITHIN a carousel they were
+                                // viewing (confirmed against a real carousel-slide
+                                // share payload -- see conversation); a plain single-
+                                // image/video post never has it. That's the signal for
+                                // "open the swipeable gallery" instead of just this one
+                                // image, since the attached media here is only ever
+                                // that one slide -- the rest of the carousel has to be
+                                // fetched separately (see openInstagramCarousel()).
+                                var isCarouselSlide = item.instagramUrl && item.instagramUrl.length > 0
+                                        && item.instagramUrl.indexOf("carousel_share_child_media_id") >= 0;
+                                if (item.msgtype === "m.image" && item.mediaLocalUrl && item.mediaLocalUrl.length > 0 && isCarouselSlide && !isReel) {
+                                    navigationPane.openInstagramCarousel(item.instagramUrl, "image", item.mediaLocalUrl);
+                                } else if (item.msgtype === "m.image" && item.mediaLocalUrl && item.mediaLocalUrl.length > 0 && !isReel) {
+                                    navigationPane.openImage(item.mediaLocalUrl);
+                                } else if (item.msgtype === "m.video" && item.mediaLocalUrl && item.mediaLocalUrl.length > 0 && !isReel) {
+                                    // Trial: see the reelWatcher branch above. Revert with
+                                    // navigationPane.openVideo(item.mediaLocalUrl,
+                                    // item.mediaDuration, item.mediaWidth, item.mediaHeight).
+                                    mediaManager.openVideoExternally(item.mediaLocalUrl);
+                                } else if (item.instagramUrl && item.instagramUrl.length > 0) {
+                                    // A genuine Reel (real video never delivered), or the
+                                    // rare case of a post/carousel share whose real media
+                                    // never resolved locally -- fall back to scraping a
+                                    // watchable video off the Instagram page itself.
+                                    // fetchInstagramVideo() returns a "file://" path
+                                    // immediately if already cached from a previous tap;
+                                    // otherwise it starts the fetch and
+                                    // messageListModel.instagramVideoResult (watched
+                                    // below) fires once it's ready.
                                     reelError = false;
                                     var cached = mediaManager.fetchInstagramVideo(item.instagramUrl);
                                     if (cached && cached.length > 0) {
@@ -520,13 +727,6 @@ NavigationPane {
                                     } else {
                                         reelLoading = true;
                                     }
-                                } else if (item.msgtype === "m.image" && item.mediaLocalUrl && item.mediaLocalUrl.length > 0) {
-                                    navigationPane.openImage(item.mediaLocalUrl);
-                                } else if (item.msgtype === "m.video" && item.mediaLocalUrl && item.mediaLocalUrl.length > 0) {
-                                    // Trial: see the reelWatcher branch above. Revert with
-                                    // navigationPane.openVideo(item.mediaLocalUrl,
-                                    // item.mediaDuration, item.mediaWidth, item.mediaHeight).
-                                    mediaManager.openVideoExternally(item.mediaLocalUrl);
                                 } else if (item.msgtype === "m.audio" && item.mediaLocalUrl && item.mediaLocalUrl.length > 0) {
                                     if (item.eventId === messageListModel.playingAudioEventId && messageListModel.audioIsPlaying) {
                                         chatAudioPlayer.pause();

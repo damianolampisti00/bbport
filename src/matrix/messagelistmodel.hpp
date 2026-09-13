@@ -127,6 +127,11 @@ class MessageListModel : public QObject
     // itself, and this needs to fire an action, not just update a value a
     // delegate could bind to).
     Q_PROPERTY(QVariantMap instagramVideoResult READ instagramVideoResult NOTIFY instagramVideoResultChanged)
+    // Same "property mirror" pattern as instagramVideoResult above, for
+    // MediaManager::fetchInstagramCarousel(): {"ok", "eventId", "items"}
+    // where items is the same [{type, url}, ...] list the fetch itself
+    // returns synchronously on a cache hit.
+    Q_PROPERTY(QVariantMap instagramCarouselResult READ instagramCarouselResult NOTIFY instagramCarouselResultChanged)
     // The message currently staged as a reply target, or an empty map if
     // none -- {"eventId", "senderShort", "bodyPreview"}. Set via
     // setReplyTarget() (called from a message bubble's long-press context
@@ -170,6 +175,7 @@ public:
     int seekRequestMs() const;
     void setSeekRequestMs(int ms);
     QVariantMap instagramVideoResult() const;
+    QVariantMap instagramCarouselResult() const;
     QVariantMap replyTarget() const;
     bool hasReplyTarget() const;
     // eventId/senderId identify the message and its sender's full MXID
@@ -223,6 +229,7 @@ signals:
     void audioDurationMsChanged();
     void seekRequestMsChanged();
     void instagramVideoResultChanged();
+    void instagramCarouselResultChanged();
     void replyTargetChanged();
     void editTargetChanged();
 
@@ -238,6 +245,8 @@ private slots:
     void onThumbnailReady(const QString &mxcUri, const QString &localFileUrl);
     void onInstagramVideoReady(const QString &instagramUrl, const QString &localFileUrl);
     void onInstagramVideoFailed(const QString &instagramUrl);
+    void onInstagramCarouselReady(const QString &instagramUrl, const QVariantList &items);
+    void onInstagramCarouselFailed(const QString &instagramUrl);
     void onUploadFinished(const QString &localFilePath, const QString &mxcUri, const QString &mimeType, bool ok);
     void onSendReplyFinished();
     void onTypingStopTimeout();
@@ -316,6 +325,7 @@ private:
     int m_audioDurationMs;
     int m_seekRequestMs;
     QVariantMap m_instagramVideoResult;
+    QVariantMap m_instagramCarouselResult;
     QVariantMap m_replyTarget;
     QVariantMap m_editTarget;
     QString m_lastSendError;

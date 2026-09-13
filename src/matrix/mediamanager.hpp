@@ -6,6 +6,7 @@
 #include <QHash>
 #include <QSet>
 #include <QVariantMap>
+#include <QVariantList>
 #include <QProcess>
 
 namespace bb { namespace system { class InvokeManager; } }
@@ -65,6 +66,22 @@ public:
     // actually a video/Reel).
     Q_INVOKABLE QString fetchInstagramVideo(const QString &instagramUrl);
 
+    // Returns the cached carousel slides -- [{type: "image"|"video", url:
+    // "file://..."}, ...] in carousel order -- if already fetched;
+    // otherwise starts an async fetch (instagramCarouselReady() fires
+    // later) and returns an empty list. instagramUrl is the same post-page
+    // link fetchInstagramVideo() takes, but here yt-dlp is asked to grab
+    // the WHOLE carousel (Instagram's multi-image/video "swipe" posts) via
+    // its playlist support, one file per slide, instead of a single Reel.
+    // A specific slide's own share link carries a carousel_share_child_
+    // media_id query parameter identifying which slide was shared -- QML
+    // uses that to decide whether to open this single-image viewer or this
+    // gallery, but fetching/caching here is always keyed by the base post
+    // URL (query string stripped) so every slide of the same carousel
+    // shares one cached result regardless of which one was actually shared
+    // into the chat -- see conversation.
+    Q_INVOKABLE QVariantList fetchInstagramCarousel(const QString &instagramUrl);
+
     // Transcodes localFilePath (the AudioRecorder's own m4a/AAC output) to
     // Ogg/Opus via ffmpeg, then uploads the result -- but the uploadFinished
     // signal still reports localFilePath itself (not the throwaway .ogg
@@ -104,6 +121,9 @@ signals:
     void thumbnailFailed(const QString &mxcUri);
     void instagramVideoReady(const QString &instagramUrl, const QString &localFileUrl);
     void instagramVideoFailed(const QString &instagramUrl);
+    // items: see fetchInstagramCarousel()'s doc comment.
+    void instagramCarouselReady(const QString &instagramUrl, const QVariantList &items);
+    void instagramCarouselFailed(const QString &instagramUrl);
 
 private slots:
     void onDownloadFinished();
@@ -113,6 +133,8 @@ private slots:
     void onFfmpegError(QProcess::ProcessError error);
     void onYoutubeDlFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void onYoutubeDlError(QProcess::ProcessError error);
+    void onCarouselYoutubeDlFinished(int exitCode, QProcess::ExitStatus exitStatus);
+    void onCarouselYoutubeDlError(QProcess::ProcessError error);
     void onAudioTranscodeFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void onAudioTranscodeError(QProcess::ProcessError error);
 
@@ -135,6 +157,15 @@ private:
     void finishFfmpegJob(QProcess *proc, bool succeeded);
     void finishYoutubeDlJob(QProcess *proc, bool succeeded);
     void finishAudioTranscodeJob(QProcess *proc, bool succeeded);
+    void finishCarouselJob(QProcess *proc, bool succeeded);
+    // Strips any query string -- see fetchInstagramCarousel()'s doc comment
+    // for why the base post URL, not a specific slide's own link, is the
+    // actual cache/fetch key.
+    static QString carouselBaseUrl(const QString &instagramUrl);
+    QString carouselCacheKey(const QString &baseUrl) const;
+    QString carouselManifestPath(const QString &baseUrl) const;
+    QVariantList loadCarouselManifest(const QString &baseUrl) const;
+    void saveCarouselManifest(const QString &baseUrl, const QVariantList &items) const;
 
     struct FfmpegJob {
         QString mxcUri;
@@ -161,6 +192,8 @@ private:
     QHash<QNetworkReply*, QString> m_thumbCachePath; // reply -> its cache path
     QHash<QProcess*, QString> m_ytdlTarget; // process -> instagramUrl
     QHash<QProcess*, QString> m_ytdlOutTemplate; // process -> youtube-dl -o template (to locate the actual output file)
+    QHash<QProcess*, QString> m_carouselTarget; // process -> instagramUrl (the exact slide link that was tapped, for the signal's identity)
+    QHash<QProcess*, QString> m_carouselOutPrefix; // process -> output filename prefix (to glob the resulting per-slide files)
     QHash<QProcess*, AudioUploadJob> m_audioUploadJobs;
     QHash<QString, QString> m_uploadPathRemap; // transcoded temp path -> original path, consumed in onUploadFinished
     bb::system::InvokeManager *m_invokeManager;

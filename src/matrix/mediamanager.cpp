@@ -437,6 +437,177 @@ void MediaManager::finishYoutubeDlJob(QProcess *proc, bool succeeded)
     emit instagramVideoReady(instagramUrl, "file://" + cachePath);
 }
 
+QString MediaManager::carouselBaseUrl(const QString &instagramUrl)
+{
+    int qIdx = instagramUrl.indexOf('?');
+    return qIdx >= 0 ? instagramUrl.left(qIdx) : instagramUrl;
+}
+
+QString MediaManager::carouselCacheKey(const QString &baseUrl) const
+{
+    QByteArray hash = QCryptographicHash::hash(("carousel|" + baseUrl).toUtf8(), QCryptographicHash::Md5).toHex();
+    return m_cacheDir + "/" + QString::fromLatin1(hash);
+}
+
+QString MediaManager::carouselManifestPath(const QString &baseUrl) const
+{
+    return carouselCacheKey(baseUrl) + "_manifest.json";
+}
+
+QVariantList MediaManager::loadCarouselManifest(const QString &baseUrl) const
+{
+    QVariantList empty;
+    QFile f(carouselManifestPath(baseUrl));
+    if (!f.open(QIODevice::ReadOnly)) return empty;
+    QByteArray data = f.readAll();
+    f.close();
+
+    JsonDataAccess jda;
+    QVariant parsed = jda.loadFromBuffer(data);
+    if (jda.hasError()) return empty;
+
+    QVariantList items = parsed.toList();
+    for (int i = 0; i < items.size(); ++i) {
+        QString path = items.at(i).toMap().value("url").toString();
+        path.remove("file://");
+        if (!QFile::exists(path)) return empty; // stale/partial cache -- refetch rather than serve broken paths
+    }
+    return items;
+}
+
+void MediaManager::saveCarouselManifest(const QString &baseUrl, const QVariantList &items) const
+{
+    JsonDataAccess jda;
+    QByteArray buffer;
+    jda.saveToBuffer(QVariant(items), &buffer);
+    QFile f(carouselManifestPath(baseUrl));
+    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        f.write(buffer);
+    }
+}
+
+QVariantList MediaManager::fetchInstagramCarousel(const QString &instagramUrl)
+{
+    if (instagramUrl.isEmpty()) return QVariantList();
+
+    QString baseUrl = carouselBaseUrl(instagramUrl);
+    QVariantList cached = loadCarouselManifest(baseUrl);
+    if (!cached.isEmpty()) return cached;
+
+    QString inFlightKey = "carousel|" + baseUrl;
+    if (m_inFlight.contains(inFlightKey)) return QVariantList();
+    m_inFlight.insert(inFlightKey);
+
+    // One file per carousel slide via yt-dlp's own playlist support --
+    // Instagram carousels extract as a multi-entry playlist (confirmed via
+    // yt-dlp's own issue tracker discussing mixed image/video carousels).
+    // playlist_index is zero-padded (%02d) so alphabetical globbing below
+    // (QDir::Name) sorts slide 10 after slide 9, not before slide 2.
+    QString outPrefix = carouselCacheKey(baseUrl) + "_dl";
+    QString outTemplate = outPrefix + "_%(playlist_index)02d.%(ext)s";
+
+    // Same stale-leftover cleanup as fetchInstagramVideo(), scoped to this
+    // carousel's own prefix -- otherwise a previous run's partial files
+    // could get globbed alongside (or instead of) this run's real output.
+    {
+        QFileInfo prefixInfo(outPrefix);
+        QStringList leftovers = QDir(prefixInfo.absolutePath())
+                .entryList(QStringList() << (prefixInfo.fileName() + "_*"), QDir::Files);
+        foreach (const QString &name, leftovers) {
+            QFile::remove(prefixInfo.absolutePath() + "/" + name);
+        }
+    }
+
+    // No "-f best": that's fine for a single Reel's video, but forcing a
+    // video-oriented format selector onto a carousel mixing image and video
+    // entries is exactly the kind of thing yt-dlp's own issue tracker flags
+    // as fragile -- leaving format selection to yt-dlp's own per-entry
+    // defaults (already how a plain single Instagram photo post downloads
+    // correctly) is safer across a mixed carousel.
+    QStringList args;
+    args << "-m" << "yt_dlp"
+         << "--no-warnings" << "--no-check-certificate"
+         << "--ffmpeg-location" << QString::fromLatin1(kBerryCoreFfmpeg)
+         << "-o" << outTemplate
+         << baseUrl;
+
+    debugLog("yt-dlp (carousel) starting: " + QString::fromLatin1(kBerryCorePython3) + " " + args.join(" "));
+
+    QProcess *proc = new QProcess(this);
+    proc->setProcessEnvironment(berryCoreEnvironment());
+    m_carouselTarget[proc] = instagramUrl;
+    m_carouselOutPrefix[proc] = outPrefix;
+    connect(proc, SIGNAL(finished(int,QProcess::ExitStatus)), this, SLOT(onCarouselYoutubeDlFinished(int,QProcess::ExitStatus)));
+    connect(proc, SIGNAL(error(QProcess::ProcessError)), this, SLOT(onCarouselYoutubeDlError(QProcess::ProcessError)));
+    proc->start(QString::fromLatin1(kBerryCorePython3), args);
+    return QVariantList();
+}
+
+void MediaManager::onCarouselYoutubeDlFinished(int exitCode, QProcess::ExitStatus exitStatus)
+{
+    QProcess *proc = qobject_cast<QProcess*>(sender());
+    if (!proc || !m_carouselTarget.contains(proc)) return; // error() already handled it
+    finishCarouselJob(proc, exitStatus == QProcess::NormalExit && exitCode == 0);
+}
+
+void MediaManager::onCarouselYoutubeDlError(QProcess::ProcessError error)
+{
+    QProcess *proc = qobject_cast<QProcess*>(sender());
+    if (!proc || !m_carouselTarget.contains(proc)) return;
+    debugLog(QString("yt-dlp (carousel) process error: %1 (%2)").arg(int(error)).arg(proc->errorString()));
+    finishCarouselJob(proc, false);
+}
+
+void MediaManager::finishCarouselJob(QProcess *proc, bool succeeded)
+{
+    QString instagramUrl = m_carouselTarget.take(proc);
+    QString outPrefix = m_carouselOutPrefix.take(proc);
+    QString baseUrl = carouselBaseUrl(instagramUrl);
+
+    // Temporary diagnostic logging (carousel fetch bring-up) -- same
+    // reasoning as finishYoutubeDlJob()'s: yt-dlp's own stdout/stderr is the
+    // only way to see why it failed.
+    debugLog(QString("yt-dlp (carousel) finished url=%1 succeeded=%2 exitCode=%3")
+                 .arg(baseUrl).arg(succeeded).arg(proc->exitCode()));
+    QString stdOut = QString::fromUtf8(proc->readAllStandardOutput());
+    QString stdErr = QString::fromUtf8(proc->readAllStandardError());
+    if (!stdOut.isEmpty()) debugLog("  yt-dlp stdout: " + stdOut.left(2000));
+    if (!stdErr.isEmpty()) debugLog("  yt-dlp stderr: " + stdErr.left(2000));
+
+    proc->deleteLater();
+    m_inFlight.remove("carousel|" + baseUrl);
+
+    QFileInfo prefixInfo(outPrefix);
+    QStringList matches = QDir(prefixInfo.absolutePath())
+            .entryList(QStringList() << (prefixInfo.fileName() + "_*"), QDir::Files, QDir::Name);
+    debugLog(QString("  yt-dlp (carousel) output matches: %1").arg(matches.join(", ")));
+
+    QVariantList items;
+    if (succeeded) {
+        foreach (const QString &name, matches) {
+            QString mime = mimeTypeForFile(name);
+            if (!mime.startsWith("image/") && !mime.startsWith("video/")) continue; // skip .part/unknown leftovers
+            QVariantMap item;
+            item["type"] = mime.startsWith("video/") ? "video" : "image";
+            item["url"] = "file://" + prefixInfo.absolutePath() + "/" + name;
+            items.append(item);
+        }
+    }
+
+    if (items.isEmpty()) {
+        // Nothing usable is going into the manifest, so nothing produced
+        // here should linger on disk either.
+        foreach (const QString &name, matches) {
+            QFile::remove(prefixInfo.absolutePath() + "/" + name);
+        }
+        emit instagramCarouselFailed(instagramUrl);
+        return;
+    }
+
+    saveCarouselManifest(baseUrl, items);
+    emit instagramCarouselReady(instagramUrl, items);
+}
+
 void MediaManager::openVideoExternally(const QString &localFileUrl)
 {
     if (localFileUrl.isEmpty()) return;
