@@ -570,8 +570,22 @@ NavigationPane {
                     ForeignWindowControl {
                         id: fwcCarouselVideoSurface
                         visible: activeVideoUrl.length > 0 && boundToWindow
-                        horizontalAlignment: HorizontalAlignment.Fill
-                        verticalAlignment: VerticalAlignment.Fill
+                        // Fixed pixel size, NOT Fill: this is exactly the
+                        // bug videoViewerPage's own ForeignWindowControl
+                        // comment warns about -- mm-renderer renders solid
+                        // black if the surface it binds to hasn't already
+                        // resolved to real pixel dimensions at bind time,
+                        // which Fill-based layout sizing doesn't guarantee
+                        // has happened yet. videoViewerPage sidesteps this
+                        // with a fixed maxBox square (matching its own
+                        // "unknown dimensions" fallback, since carousel
+                        // items carry no width/height metadata to size
+                        // against either) -- same fix here, verbatim.
+                        property int maxBox: 720
+                        preferredWidth: maxBox
+                        preferredHeight: maxBox
+                        horizontalAlignment: HorizontalAlignment.Center
+                        verticalAlignment: VerticalAlignment.Center
                         windowId: "bbportCarouselVideoSurface"
                         updatedProperties: WindowProperty.Position | WindowProperty.Size
                     }
