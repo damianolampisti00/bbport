@@ -382,13 +382,117 @@ NavigationPane {
                 property bool loadingMore: true
                 property bool loadError: false
 
+                // One slide full-screen at a time (index into
+                // carouselDataModel), not a scrollable list -- Cascades has
+                // no page-snapping scroll container (confirmed: no
+                // SwipeHandler/PanHandler exists in this SDK, and
+                // ListView/ScrollView have no snap-to-item mode), so a
+                // horizontal ListView would leave slides stopped mid-drag
+                // instead of landing exactly on one. Advancing currentIndex
+                // ourselves off a raw touch gesture (below) gives an exact,
+                // predictable "always shows exactly one whole slide" result.
+                property int currentIndex: 0
+                // Plain properties explicitly assigned by refreshCurrentSlide()
+                // below, rather than binding ImageView/the position label
+                // directly to carouselDataModel.value(currentIndex)/.size():
+                // a QML binding only re-evaluates when a property it reads
+                // changes, and ArrayDataModel's own append()/clear() aren't
+                // property changes -- so a binding on .value()/.size() would
+                // silently keep showing stale content the moment the
+                // placeholder slide gets replaced by the real fetched list
+                // (currentIndex staying at 0 both times is exactly that
+                // case). Same "explicit assignment over relying on Cascades
+                // binding reactivity" lesson as every other property-mirror
+                // in this file.
+                property string currentSlideType: "image"
+                property string currentSlideUrl: ""
+                property int slideCount: 0
+                property string activeVideoUrl: ""
+                property bool videoPlaying: false
+                // Touch-down x (Container-local), reset to -1 between
+                // gestures; isDown()/isUp()/localX are real Q_PROPERTYs on
+                // bb::cascades::TouchEvent (verified against the SDK
+                // headers), not a guess -- this is a plain "flick" detector,
+                // not a live drag-follow animation, to keep it simple and
+                // robust: TouchType.Down records the start x, TouchType.Up
+                // compares against it once, no per-frame tracking needed.
+                property real swipeStartX: -1
+
+                function refreshCurrentSlide() {
+                    slideCount = carouselDataModel.size();
+                    activeVideoUrl = "";
+                    videoPlaying = false;
+                    if (currentIndex < 0 || currentIndex >= slideCount) {
+                        currentSlideType = "image";
+                        currentSlideUrl = "";
+                        return;
+                    }
+                    var item = carouselDataModel.value(currentIndex);
+                    currentSlideType = item ? item.type : "image";
+                    currentSlideUrl = item ? item.url : "";
+                    if (currentSlideType === "video") activeVideoUrl = currentSlideUrl;
+                }
+                onActiveVideoUrlChanged: {
+                    if (activeVideoUrl.length === 0) return;
+                    // Autoplay on arrival, same NativeVideoPlayer/mm-renderer
+                    // approach as videoViewerPage (see its own comment for
+                    // why: bb::multimedia::MediaPlayer rendered solid black
+                    // on-device despite binding correctly).
+                    videoPlaying = carouselVideoPlayer.play(activeVideoUrl, "bbportCarouselVideoSurface", fwcCarouselVideoSurface.windowGroup);
+                }
+                // Called from navigationPane's onPopTransitionEnded (see its
+                // own comment) -- without this mm-renderer keeps playing
+                // behind the popped page, same reasoning as videoViewerPage.
+                function stopVideo() {
+                    carouselVideoPlayer.stop();
+                    videoPlaying = false;
+                }
+
+                // dx <= 0 advances forward (left-drag reveals the next
+                // slide, matching Instagram's own gallery -- this is the
+                // content the carousel came from); dx > 0 goes back. Past
+                // either end there's nothing left to reveal, so the same
+                // gesture instead exits the viewer -- symmetric with the
+                // system's own edge-swipe-back, so it feels like "falling
+                // off" the gallery in either direction.
+                function handleSwipe(dx) {
+                    var threshold = ui.du(15);
+                    if (dx <= -threshold) {
+                        if (currentIndex < slideCount - 1) {
+                            currentIndex = currentIndex + 1;
+                            refreshCurrentSlide();
+                        } else {
+                            navigationPane.pop();
+                        }
+                    } else if (dx >= threshold) {
+                        if (currentIndex > 0) {
+                            currentIndex = currentIndex - 1;
+                            refreshCurrentSlide();
+                        } else {
+                            navigationPane.pop();
+                        }
+                    } else if (activeVideoUrl.length > 0) {
+                        // Too short to be a swipe -- a plain tap on a video
+                        // slide toggles play/pause instead.
+                        if (videoPlaying) {
+                            carouselVideoPlayer.pause();
+                        } else {
+                            carouselVideoPlayer.resume();
+                        }
+                        videoPlaying = !videoPlaying;
+                    }
+                }
+
                 onCreationCompleted: {
                     carouselDataModel.append([{"type": firstSlideType, "url": firstSlideUrl}]);
+                    refreshCurrentSlide();
                     var cached = mediaManager.fetchInstagramCarousel(instagramUrl);
                     if (cached && cached.length > 0) {
                         loadingMore = false;
                         carouselDataModel.clear();
                         carouselDataModel.append(cached);
+                        currentIndex = 0;
+                        refreshCurrentSlide();
                     }
                 }
 
@@ -407,89 +511,114 @@ NavigationPane {
                     if (carouselWatcher.ok && carouselWatcher.items && carouselWatcher.items.length > 0) {
                         carouselDataModel.clear();
                         carouselDataModel.append(carouselWatcher.items);
+                        currentIndex = 0;
+                        refreshCurrentSlide();
                     } else {
                         loadError = true;
                     }
                 }
+
+                attachedObjects: [
+                    ArrayDataModel { id: carouselDataModel }
+                ]
 
                 Container {
                     layout: DockLayout {}
                     background: Color.Black
                     horizontalAlignment: HorizontalAlignment.Fill
                     verticalAlignment: VerticalAlignment.Fill
+                    onTouch: {
+                        if (event.isDown()) {
+                            swipeStartX = event.localX;
+                        } else if (event.isUp() && swipeStartX >= 0) {
+                            var dx = event.localX - swipeStartX;
+                            swipeStartX = -1;
+                            handleSwipe(dx);
+                        }
+                    }
 
-                    // Trial: a horizontal (LeftToRight) StackListLayout for a
-                    // swipeable gallery is untested in this Cascades build --
-                    // every other ListView in this app is the default
-                    // vertical orientation. Revert to a plain vertical
-                    // ListView (one slide per row, scroll down instead of
-                    // sideways -- still lets you "scorrere" through them,
-                    // just not side-to-side) if this doesn't render/scroll
-                    // correctly on-device. NOT a Container+Repeater: Cascades
-                    // QML1 doesn't support Repeater inside a Container at all
-                    // (see MessageBubbleContent.qml's reaction-pills comment)
-                    // -- ListView+ArrayDataModel is the only dynamic-list
-                    // mechanism proven to work anywhere in this app.
-                    ListView {
+                    ImageView {
+                        visible: currentSlideType !== "video"
+                        imageSource: currentSlideUrl
+                        scalingMethod: ScalingMethod.AspectFit
+                        horizontalAlignment: HorizontalAlignment.Center
+                        verticalAlignment: VerticalAlignment.Center
+                    }
+
+                    // Full-bleed rather than videoViewerPage's letterboxed
+                    // maxBox: that page knows the real content.info width/
+                    // height from the message event, this one doesn't (yt-dlp
+                    // only reports back {type, url} per slide -- see
+                    // MediaManager::fetchInstagramCarousel()), and a
+                    // full-screen gallery reads better full-bleed anyway.
+                    ForeignWindowControl {
+                        id: fwcCarouselVideoSurface
+                        visible: activeVideoUrl.length > 0 && boundToWindow
                         horizontalAlignment: HorizontalAlignment.Fill
                         verticalAlignment: VerticalAlignment.Fill
-                        layout: StackListLayout { orientation: LayoutOrientation.LeftToRight }
-                        dataModel: ArrayDataModel { id: carouselDataModel }
-                        onTriggered: {
-                            var item = dataModel.data(indexPath);
-                            if (item && item.type === "video") {
-                                mediaManager.openVideoExternally(item.url);
+                        windowId: "bbportCarouselVideoSurface"
+                        updatedProperties: WindowProperty.Position | WindowProperty.Size
+                    }
+                    Label {
+                        visible: activeVideoUrl.length > 0 && !videoPlaying
+                        text: "▶"
+                        horizontalAlignment: HorizontalAlignment.Center
+                        verticalAlignment: VerticalAlignment.Center
+                        textStyle.color: Color.White
+                        textStyle.fontSize: FontSize.XLarge
+                    }
+
+                    // Position indicator, purely informational (not a tap
+                    // target -- swiping/the edge buttons are the only way to
+                    // move, same as the rest of this page).
+                    Label {
+                        visible: slideCount > 1
+                        text: (currentIndex + 1) + " / " + slideCount
+                        horizontalAlignment: HorizontalAlignment.Center
+                        verticalAlignment: VerticalAlignment.Top
+                        topMargin: ui.du(1.5)
+                        textStyle.color: Color.White
+                        textStyle.base: SystemDefaults.TextStyles.SmallText
+                    }
+
+                    // Fallback navigation for whenever the swipe gesture
+                    // above doesn't land reliably on real hardware -- see
+                    // conversation. Plain Buttons (not nested delegate
+                    // content) at Page scope are already proven to work
+                    // fine here, same as videoViewerPage's Play/Pause.
+                    Button {
+                        text: "‹"
+                        visible: slideCount > 1
+                        appearance: ControlAppearance.Plain
+                        color: Color.White
+                        preferredWidth: ui.du(8)
+                        horizontalAlignment: HorizontalAlignment.Left
+                        verticalAlignment: VerticalAlignment.Center
+                        onClicked: {
+                            if (currentIndex > 0) {
+                                currentIndex = currentIndex - 1;
+                                refreshCurrentSlide();
+                            } else {
+                                navigationPane.pop();
                             }
                         }
-                        listItemComponents: [
-                            ListItemComponent {
-                                type: ""
-                                Container {
-                                    // A ListItemComponent's delegate is an
-                                    // isolated context -- confirmed on-device
-                                    // (asset:///main.qml ReferenceError:
-                                    // Can't find variable) that it cannot see
-                                    // a plain property declared on the
-                                    // enclosing Page (viewportWidth/Height,
-                                    // an earlier attempt at exact pixel
-                                    // sizing here). Fill matches every other
-                                    // full-bleed Container in this app and
-                                    // needs no cross-scope value at all --
-                                    // the ListView's own width/height already
-                                    // is the viewport.
-                                    horizontalAlignment: HorizontalAlignment.Fill
-                                    verticalAlignment: VerticalAlignment.Fill
-                                    layout: DockLayout {}
-                                    background: Color.create("#1a2026")
-                                    ImageView {
-                                        visible: ListItemData.type !== "video"
-                                        imageSource: ListItemData.url
-                                        scalingMethod: ScalingMethod.AspectFit
-                                        horizontalAlignment: HorizontalAlignment.Center
-                                        verticalAlignment: VerticalAlignment.Center
-                                    }
-                                    // Video slides: yt-dlp already downloaded the real
-                                    // playable file (unlike a Reel share, which never
-                                    // gets one -- see
-                                    // MediaManager::fetchInstagramCarousel()), but
-                                    // there's no separately-extracted poster frame to
-                                    // show as a static preview, so this is a plain tap
-                                    // target (via the ListView's own onTriggered above,
-                                    // not a handler nested in here -- interactive
-                                    // elements nested inside a ListItemComponent have
-                                    // repeatedly proven unreliable in this Cascades
-                                    // build, same reasoning as hiddenChatsListView).
-                                    Label {
-                                        visible: ListItemData.type === "video"
-                                        text: "▶ Tocca per riprodurre"
-                                        horizontalAlignment: HorizontalAlignment.Center
-                                        verticalAlignment: VerticalAlignment.Center
-                                        textStyle.color: Color.White
-                                        textStyle.fontSize: FontSize.XLarge
-                                    }
-                                }
+                    }
+                    Button {
+                        text: "›"
+                        visible: slideCount > 1
+                        appearance: ControlAppearance.Plain
+                        color: Color.White
+                        preferredWidth: ui.du(8)
+                        horizontalAlignment: HorizontalAlignment.Right
+                        verticalAlignment: VerticalAlignment.Center
+                        onClicked: {
+                            if (currentIndex < slideCount - 1) {
+                                currentIndex = currentIndex + 1;
+                                refreshCurrentSlide();
+                            } else {
+                                navigationPane.pop();
                             }
-                        ]
+                        }
                     }
 
                     Container {
@@ -522,6 +651,12 @@ NavigationPane {
                         textStyle.color: Color.create("#ff6b6b")
                         multiline: true
                     }
+
+                    attachedObjects: [
+                        NativeVideoPlayer {
+                            id: carouselVideoPlayer
+                        }
+                    ]
                 }
             }
         },
