@@ -4,6 +4,7 @@
 #include "mediamanager.hpp"
 #include "keybackupmanager.hpp"
 #include "olmcryptomanager.hpp"
+#include "bbportlog.hpp"
 
 #include <bb/cascades/ArrayDataModel>
 #include <bb/data/JsonDataAccess>
@@ -435,6 +436,15 @@ void MessageListModel::setRoomId(const QString &roomId)
     fetchRoomMembers(roomId);
 
     QVariantList cached = m_store->eventsForRoom(roomId);
+    // Temporary diagnostic (see conversation -- rooms reported opening empty
+    // on first login, only fixed by leaving and reopening): this is a
+    // one-time snapshot read of TimelineStore at the moment the room is
+    // opened, not a query that re-runs later, so an empty result here means
+    // either the room genuinely has no history yet, or this room's slice of
+    // the first /sync response hadn't been processed into TimelineStore yet
+    // when the user tapped in.
+    bbportLog(QString("[BBport:room] setRoomId %1 cached=%2 prevBatch=%3")
+                  .arg(roomId).arg(cached.size()).arg(m_store->prevBatchFor(roomId).isEmpty() ? "empty" : "set"));
     QVariantList displayItems;
     for (int i = 0; i < cached.size(); ++i) {
         displayItems << toDisplayItem(cached.at(i).toMap());
@@ -498,6 +508,13 @@ void MessageListModel::onRoomMembersReplyFinished()
 void MessageListModel::onEventAppended(const QString &roomId, const QVariantMap &event)
 {
     if (roomId != m_roomId) return;
+    // Temporary diagnostic (see setRoomId()'s comment) -- confirms whether a
+    // room opened before its first-sync data landed actually does receive
+    // this live signal afterwards (it should, since TimelineStore's
+    // eventAppended is connected in the constructor regardless of which
+    // room is currently open).
+    bbportLog(QString("[BBport:room] onEventAppended room=%1 eventId=%2 modelSizeNow=%3")
+                  .arg(roomId, event.value("eventId").toString()).arg(m_model->size() + 1));
     m_model->append(toDisplayItem(event));
     if (!event.value("isOutgoing").toBool()) {
         markRead(event.value("eventId").toString());
