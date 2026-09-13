@@ -571,7 +571,18 @@ void MediaManager::onCarouselYoutubeDlFinished(int exitCode, QProcess::ExitStatu
 {
     QProcess *proc = qobject_cast<QProcess*>(sender());
     if (!proc || !m_carouselTarget.contains(proc)) return; // error() already handled it
-    finishCarouselJob(proc, exitStatus == QProcess::NormalExit && exitCode == 0);
+    // NOT gated on exitCode == 0: confirmed via a real device log that
+    // yt-dlp's Instagram extractor exits 1 for an entirely ordinary mixed
+    // photo+video carousel -- it tries to pull "video formats" for every
+    // playlist entry and errors out per-entry on the photo slides ("No
+    // video formats found!"), even though the video slide(s) downloaded
+    // completely fine. Gating on exitCode used to discard (and delete) a
+    // perfectly good downloaded file just because yt-dlp's own summary
+    // exit code reflected those unrelated per-photo failures. NormalExit
+    // (not Crashed/killed) is enough to trust whatever files actually
+    // landed on disk -- finishCarouselJob() below only accepts entries
+    // that pass a real image/video mimetype check anyway.
+    finishCarouselJob(proc, exitStatus == QProcess::NormalExit);
 }
 
 void MediaManager::onCarouselYoutubeDlError(QProcess::ProcessError error)
