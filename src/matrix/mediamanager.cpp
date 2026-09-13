@@ -646,8 +646,128 @@ void MediaManager::finishCarouselJob(QProcess *proc, bool succeeded)
         return;
     }
 
-    saveCarouselManifest(baseUrl, items);
-    emit instagramCarouselReady(instagramUrl, items);
+    // Video items are muxed at Instagram's own export resolution/profile
+    // (yt-dlp's own ffmpeg just combines the separate DASH video+audio
+    // streams into one container) -- same "audio fine, video stays black"
+    // Q5 hardware-decoder limitation as regular video messages, so each
+    // needs the identical re-encode resolve()'s isVideo branch already
+    // does before it's actually playable. Kicked off here as its own
+    // fan-out/fan-in stage; instagramCarouselReady/Failed only fires once
+    // every video item's encode (if any) has landed -- see
+    // finalizeCarouselIfDone().
+    CarouselPending pending;
+    pending.instagramUrl = instagramUrl;
+    pending.items = items;
+    pending.pendingEncodes = 0;
+
+    for (int i = 0; i < items.size(); ++i) {
+        QVariantMap item = items.at(i).toMap();
+        if (item.value("type").toString() != "video") continue;
+
+        QString inPath = item.value("url").toString();
+        inPath.remove("file://");
+        QString outPath = inPath + "_enc.mp4";
+
+        QStringList args;
+        args << "-y" << "-i" << inPath
+             << "-vf" << "scale='min(1280,iw)':-2"
+             << "-c:v" << "libx264" << "-profile:v" << "high" << "-level" << "4.0"
+             << "-preset" << "fast"
+             << "-b:v" << "2500k" << "-maxrate" << "2500k" << "-bufsize" << "5000k"
+             << "-c:a" << "aac" << "-b:a" << "128k" << "-ar" << "44100"
+             << "-movflags" << "+faststart"
+             << outPath;
+
+        debugLog("yt-dlp (carousel) re-encoding video slide: " + inPath);
+
+        CarouselVideoEncodeJob job;
+        job.baseUrl = baseUrl;
+        job.inPath = inPath;
+        job.outPath = outPath;
+        job.itemIndex = i;
+
+        QProcess *encProc = new QProcess(this);
+        encProc->setProcessEnvironment(berryCoreEnvironment());
+        m_carouselEncodeJobs[encProc] = job;
+        connect(encProc, SIGNAL(finished(int,QProcess::ExitStatus)), this, SLOT(onCarouselEncodeFinished(int,QProcess::ExitStatus)));
+        connect(encProc, SIGNAL(error(QProcess::ProcessError)), this, SLOT(onCarouselEncodeError(QProcess::ProcessError)));
+        encProc->start(QString::fromLatin1(kBerryCoreFfmpeg), args);
+        ++pending.pendingEncodes;
+    }
+
+    m_carouselPending[baseUrl] = pending;
+    finalizeCarouselIfDone(baseUrl);
+}
+
+void MediaManager::onCarouselEncodeFinished(int exitCode, QProcess::ExitStatus exitStatus)
+{
+    QProcess *proc = qobject_cast<QProcess*>(sender());
+    if (!proc || !m_carouselEncodeJobs.contains(proc)) return;
+    finishCarouselEncodeJob(proc, exitStatus == QProcess::NormalExit && exitCode == 0);
+}
+
+void MediaManager::onCarouselEncodeError(QProcess::ProcessError error)
+{
+    QProcess *proc = qobject_cast<QProcess*>(sender());
+    if (!proc || !m_carouselEncodeJobs.contains(proc)) return;
+    debugLog(QString("yt-dlp (carousel) re-encode process error: %1 (%2)").arg(int(error)).arg(proc->errorString()));
+    finishCarouselEncodeJob(proc, false);
+}
+
+void MediaManager::finishCarouselEncodeJob(QProcess *proc, bool succeeded)
+{
+    CarouselVideoEncodeJob job = m_carouselEncodeJobs.take(proc);
+    proc->deleteLater();
+
+    if (!m_carouselPending.contains(job.baseUrl)) {
+        // The carousel this belonged to already finalized (shouldn't
+        // normally happen, since finalizeCarouselIfDone() only fires once
+        // every encode -- including this one -- has landed, but clean up
+        // regardless rather than leaking a stray output file).
+        QFile::remove(job.outPath);
+        return;
+    }
+
+    CarouselPending &pending = m_carouselPending[job.baseUrl];
+    QVariantMap item = pending.items.at(job.itemIndex).toMap();
+    if (succeeded && QFile::exists(job.outPath)) {
+        item["url"] = "file://" + job.outPath;
+        QFile::remove(job.inPath); // raw muxed file is no longer needed
+    } else {
+        debugLog("yt-dlp (carousel) re-encode failed, dropping slide: " + job.inPath);
+        item["_encodeFailed"] = true;
+        QFile::remove(job.outPath);
+    }
+    pending.items.replace(job.itemIndex, item);
+    --pending.pendingEncodes;
+
+    finalizeCarouselIfDone(job.baseUrl);
+}
+
+void MediaManager::finalizeCarouselIfDone(const QString &baseUrl)
+{
+    if (!m_carouselPending.contains(baseUrl)) return;
+    CarouselPending pending = m_carouselPending.value(baseUrl);
+    if (pending.pendingEncodes > 0) return;
+    m_carouselPending.remove(baseUrl);
+
+    // A video slide whose re-encode failed outright is known-unplayable on
+    // this hardware (see the comment above where encodes are kicked off) --
+    // better to show one fewer slide than a permanently black one.
+    QVariantList finalItems;
+    for (int i = 0; i < pending.items.size(); ++i) {
+        QVariantMap item = pending.items.at(i).toMap();
+        if (item.value("_encodeFailed").toBool()) continue;
+        finalItems.append(item);
+    }
+
+    if (finalItems.isEmpty()) {
+        emit instagramCarouselFailed(pending.instagramUrl);
+        return;
+    }
+
+    saveCarouselManifest(baseUrl, finalItems);
+    emit instagramCarouselReady(pending.instagramUrl, finalItems);
 }
 
 void MediaManager::openVideoExternally(const QString &localFileUrl)

@@ -137,6 +137,8 @@ private slots:
     void onCarouselYoutubeDlFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void onCarouselYoutubeDlError(QProcess::ProcessError error);
     void onCarouselTimeout();
+    void onCarouselEncodeFinished(int exitCode, QProcess::ExitStatus exitStatus);
+    void onCarouselEncodeError(QProcess::ProcessError error);
     void onAudioTranscodeFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void onAudioTranscodeError(QProcess::ProcessError error);
 
@@ -160,6 +162,20 @@ private:
     void finishYoutubeDlJob(QProcess *proc, bool succeeded);
     void finishAudioTranscodeJob(QProcess *proc, bool succeeded);
     void finishCarouselJob(QProcess *proc, bool succeeded);
+    // Video slides yt-dlp downloads are muxed at Instagram's own export
+    // resolution/profile (just DASH video+audio combined into one
+    // container), which the Q5's hardware decoder can't handle -- same
+    // "audio fine, video stays black" limitation as regular video
+    // messages (see resolve()'s isVideo branch, whose exact ffmpeg args
+    // this reuses). Confirmed on-device: sizing the ForeignWindowControl
+    // correctly (matching videoViewerPage) did not fix a black carousel
+    // video, pointing at a codec/profile problem rather than a window-
+    // binding one.
+    void finishCarouselEncodeJob(QProcess *proc, bool succeeded);
+    // Emits instagramCarouselReady/Failed once every video item's re-encode
+    // (if any) has finished -- a no-op (returns immediately) while any are
+    // still pending.
+    void finalizeCarouselIfDone(const QString &baseUrl);
     // Strips any query string -- see fetchInstagramCarousel()'s doc comment
     // for why the base post URL, not a specific slide's own link, is the
     // actual cache/fetch key.
@@ -178,6 +194,19 @@ private:
     struct AudioUploadJob {
         QString originalPath;
         QString outPath;
+    };
+
+    struct CarouselVideoEncodeJob {
+        QString baseUrl;
+        QString inPath;   // yt-dlp's raw muxed output, removed once re-encode succeeds
+        QString outPath;  // Q5-compatible re-encoded file
+        int itemIndex;    // position within CarouselPending::items to patch
+    };
+
+    struct CarouselPending {
+        QString instagramUrl;
+        QVariantList items;   // "video" entries get their url patched in place as encodes land
+        int pendingEncodes;
     };
 
     MatrixApi *m_api;
@@ -205,6 +234,8 @@ private:
     // instagramCarouselReady nor instagramCarouselFailed would ever fire.
     QHash<QProcess*, QTimer*> m_carouselProcTimer; // process -> its watchdog timer (cleared on normal finish)
     QHash<QTimer*, QProcess*> m_carouselTimeoutTarget; // watchdog timer -> the process it guards
+    QHash<QProcess*, CarouselVideoEncodeJob> m_carouselEncodeJobs;
+    QHash<QString, CarouselPending> m_carouselPending; // baseUrl -> items awaiting any in-flight video re-encodes
     QHash<QProcess*, AudioUploadJob> m_audioUploadJobs;
     QHash<QString, QString> m_uploadPathRemap; // transcoded temp path -> original path, consumed in onUploadFinished
     bb::system::InvokeManager *m_invokeManager;
