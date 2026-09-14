@@ -139,6 +139,8 @@ private slots:
     void onCarouselTimeout();
     void onCarouselEncodeFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void onCarouselEncodeError(QProcess::ProcessError error);
+    void onCarouselSlideFetchFinished(int exitCode, QProcess::ExitStatus exitStatus);
+    void onCarouselSlideFetchError(QProcess::ProcessError error);
     void onAudioTranscodeFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void onAudioTranscodeError(QProcess::ProcessError error);
 
@@ -172,10 +174,33 @@ private:
     // video, pointing at a codec/profile problem rather than a window-
     // binding one.
     void finishCarouselEncodeJob(QProcess *proc, bool succeeded);
+    // Starts the video-re-encode fan-out (see finishCarouselEncodeJob's
+    // comment) for the given, already-final item list, then finalizes
+    // immediately if none of them are video. Shared by finishCarouselJob()
+    // (no photo slides were missing) and finishCarouselSlideFetch()'s last
+    // caller (photo slides needed the per-slide img_index retry below).
+    void startCarouselVideoEncodes(const QString &baseUrl, const QString &instagramUrl, const QVariantList &items);
     // Emits instagramCarouselReady/Failed once every video item's re-encode
     // (if any) has finished -- a no-op (returns immediately) while any are
     // still pending.
     void finalizeCarouselIfDone(const QString &baseUrl);
+    // yt-dlp's Instagram extractor tries to resolve "video formats" for
+    // every entry of a mixed photo+video carousel and errors out on the
+    // photo ones ("No video formats found!") -- confirmed a known,
+    // maintainer-closed-wontfix yt-dlp limitation (github.com/yt-dlp/yt-dlp
+    // issue #7569), not something fixable via a flag on the single
+    // --yes-playlist run finishCarouselJob() already does. Instagram's own
+    // "<post url>?img_index=N" (a real, documented, 1-based per-slide link)
+    // lets a missing slide be fetched on its own, going through the exact
+    // same single-post extraction path that already works correctly for a
+    // plain (non-carousel) Instagram photo post. finishCarouselJob() kicks
+    // this off for whichever indices its own glob didn't produce, up to
+    // the total slide count yt-dlp itself already printed in its stdout.
+    void finishCarouselSlideFetch(QProcess *proc, bool succeeded);
+    // No-op (returns immediately) while any per-slide fetch is still
+    // pending; once all have landed, merges their results into the
+    // already-known items and proceeds to startCarouselVideoEncodes().
+    void finalizeCarouselSlideFetchesIfDone(const QString &baseUrl);
     // Strips any query string -- see fetchInstagramCarousel()'s doc comment
     // for why the base post URL, not a specific slide's own link, is the
     // actual cache/fetch key.
@@ -209,6 +234,17 @@ private:
         int pendingEncodes;
     };
 
+    struct CarouselSlideFetchJob {
+        QString baseUrl;
+        QString slotPrefix; // this one fetch's own unique output prefix, globbed afterward for its real filename/extension
+    };
+
+    struct CarouselSlideFetchPending {
+        QString instagramUrl;
+        QVariantList items; // phase-1 (playlist run) items, before any missing slides are merged in
+        int pendingFetches;
+    };
+
     MatrixApi *m_api;
     QString m_cacheDir;
     QSet<QString> m_inFlight;
@@ -236,6 +272,8 @@ private:
     QHash<QTimer*, QProcess*> m_carouselTimeoutTarget; // watchdog timer -> the process it guards
     QHash<QProcess*, CarouselVideoEncodeJob> m_carouselEncodeJobs;
     QHash<QString, CarouselPending> m_carouselPending; // baseUrl -> items awaiting any in-flight video re-encodes
+    QHash<QProcess*, CarouselSlideFetchJob> m_carouselSlideJobs;
+    QHash<QString, CarouselSlideFetchPending> m_carouselSlideFetchPending; // baseUrl -> phase-1 items awaiting any missing-slide (img_index) fetches
     QHash<QProcess*, AudioUploadJob> m_audioUploadJobs;
     QHash<QString, QString> m_uploadPathRemap; // transcoded temp path -> original path, consumed in onUploadFinished
     bb::system::InvokeManager *m_invokeManager;

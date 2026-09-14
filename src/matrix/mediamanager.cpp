@@ -21,6 +21,8 @@ extern "C" {
 #include <QFileInfo>
 #include <QDir>
 #include <QCryptographicHash>
+#include <QRegExp>
+#include <QSet>
 #include <QUrl>
 #include <QDateTime>
 #include <QTextStream>
@@ -646,6 +648,151 @@ void MediaManager::finishCarouselJob(QProcess *proc, bool succeeded)
         return;
     }
 
+    // yt-dlp's Instagram extractor tries to resolve "video formats" for
+    // every entry of a mixed photo+video carousel and errors out on the
+    // photo ones ("No video formats found!") -- a known, maintainer-closed
+    // wontfix limitation (github.com/yt-dlp/yt-dlp issue #7569), confirmed
+    // via a real device log: 3 of this carousel's 4 slides (the photos)
+    // never produced a file even though yt-dlp itself reported "Downloading
+    // 4 items of 4". Rather than accept a partial carousel, missing indices
+    // get retried individually via Instagram's own "?img_index=N" per-slide
+    // link (see finishCarouselSlideFetch()'s doc comment) before moving on
+    // to video re-encoding.
+    QRegExp countRe("Downloading\\s+\\d+\\s+items?\\s+of\\s+(\\d+)");
+    int totalSlides = (countRe.indexIn(stdOut) >= 0) ? countRe.cap(1).toInt() : -1;
+
+    QSet<int> presentIndices;
+    QRegExp indexRe(QRegExp::escape(prefixInfo.fileName()) + "_(\\d+)\\..*");
+    foreach (const QString &name, matches) {
+        if (indexRe.exactMatch(name)) presentIndices.insert(indexRe.cap(1).toInt());
+    }
+
+    QList<int> missingIndices;
+    // Instagram's own UI caps a carousel at 10 slides -- also guards against
+    // a stdout parse going wrong and looping some huge bogus count.
+    for (int i = 1; i <= totalSlides && i <= 10; ++i) {
+        if (!presentIndices.contains(i)) missingIndices.append(i);
+    }
+
+    if (missingIndices.isEmpty()) {
+        startCarouselVideoEncodes(baseUrl, instagramUrl, items);
+        return;
+    }
+
+    debugLog(QString("yt-dlp (carousel) %1 of %2 slide(s) missing from the playlist run -- retrying individually via img_index")
+                 .arg(missingIndices.size()).arg(totalSlides));
+
+    CarouselSlideFetchPending slidePending;
+    slidePending.instagramUrl = instagramUrl;
+    slidePending.items = items;
+    slidePending.pendingFetches = 0;
+
+    foreach (int idx, missingIndices) {
+        QString slotPrefix = outPrefix + QString("_img%1").arg(idx, 2, 10, QChar('0'));
+        QString outTemplate = slotPrefix + ".%(ext)s";
+        // baseUrl is always query-string-free (see carouselBaseUrl()), so
+        // this never needs an "&" instead of "?".
+        QString slideUrl = baseUrl + "?img_index=" + QString::number(idx);
+
+        QStringList args;
+        args << "-m" << "yt_dlp"
+             << "--no-warnings" << "--no-check-certificate"
+             << "--ffmpeg-location" << QString::fromLatin1(kBerryCoreFfmpeg)
+             << "-o" << outTemplate
+             << slideUrl;
+
+        debugLog(QString("yt-dlp (carousel) fetching missing slide %1: %2").arg(idx).arg(slideUrl));
+
+        CarouselSlideFetchJob job;
+        job.baseUrl = baseUrl;
+        job.slotPrefix = slotPrefix;
+
+        QProcess *slideProc = new QProcess(this);
+        slideProc->setProcessEnvironment(berryCoreEnvironment());
+        m_carouselSlideJobs[slideProc] = job;
+        connect(slideProc, SIGNAL(finished(int,QProcess::ExitStatus)), this, SLOT(onCarouselSlideFetchFinished(int,QProcess::ExitStatus)));
+        connect(slideProc, SIGNAL(error(QProcess::ProcessError)), this, SLOT(onCarouselSlideFetchError(QProcess::ProcessError)));
+        slideProc->start(QString::fromLatin1(kBerryCorePython3), args);
+        ++slidePending.pendingFetches;
+    }
+
+    m_carouselSlideFetchPending[baseUrl] = slidePending;
+    finalizeCarouselSlideFetchesIfDone(baseUrl);
+}
+
+void MediaManager::onCarouselSlideFetchFinished(int exitCode, QProcess::ExitStatus exitStatus)
+{
+    QProcess *proc = qobject_cast<QProcess*>(sender());
+    if (!proc || !m_carouselSlideJobs.contains(proc)) return;
+    finishCarouselSlideFetch(proc, exitStatus == QProcess::NormalExit);
+}
+
+void MediaManager::onCarouselSlideFetchError(QProcess::ProcessError error)
+{
+    QProcess *proc = qobject_cast<QProcess*>(sender());
+    if (!proc || !m_carouselSlideJobs.contains(proc)) return;
+    debugLog(QString("yt-dlp (carousel) missing-slide fetch process error: %1 (%2)").arg(int(error)).arg(proc->errorString()));
+    finishCarouselSlideFetch(proc, false);
+}
+
+void MediaManager::finishCarouselSlideFetch(QProcess *proc, bool succeeded)
+{
+    CarouselSlideFetchJob job = m_carouselSlideJobs.take(proc);
+
+    debugLog(QString("yt-dlp (carousel) missing-slide fetch finished succeeded=%1 exitCode=%2")
+                 .arg(succeeded).arg(proc->exitCode()));
+    QString stdErr = QString::fromUtf8(proc->readAllStandardError());
+    if (!stdErr.isEmpty()) debugLog("  yt-dlp stderr: " + stdErr.left(1000));
+
+    proc->deleteLater();
+
+    QFileInfo slotInfo(job.slotPrefix);
+    QStringList found = QDir(slotInfo.absolutePath())
+            .entryList(QStringList() << (slotInfo.fileName() + ".*"), QDir::Files);
+
+    if (!m_carouselSlideFetchPending.contains(job.baseUrl)) {
+        // The carousel this belonged to already finalized/abandoned --
+        // clean up whatever this fetch produced rather than leak it.
+        foreach (const QString &name, found) QFile::remove(slotInfo.absolutePath() + "/" + name);
+        return;
+    }
+
+    CarouselSlideFetchPending &pending = m_carouselSlideFetchPending[job.baseUrl];
+
+    if (succeeded) {
+        foreach (const QString &name, found) {
+            QString mime = mimeTypeForFile(name);
+            if (!mime.startsWith("image/") && !mime.startsWith("video/")) continue;
+            QVariantMap item;
+            item["type"] = mime.startsWith("video/") ? "video" : "image";
+            item["url"] = "file://" + slotInfo.absolutePath() + "/" + name;
+            pending.items.append(item);
+        }
+    } else {
+        foreach (const QString &name, found) QFile::remove(slotInfo.absolutePath() + "/" + name);
+    }
+
+    --pending.pendingFetches;
+    finalizeCarouselSlideFetchesIfDone(job.baseUrl);
+}
+
+void MediaManager::finalizeCarouselSlideFetchesIfDone(const QString &baseUrl)
+{
+    if (!m_carouselSlideFetchPending.contains(baseUrl)) return;
+    CarouselSlideFetchPending pending = m_carouselSlideFetchPending.value(baseUrl);
+    if (pending.pendingFetches > 0) return;
+    m_carouselSlideFetchPending.remove(baseUrl);
+
+    if (pending.items.isEmpty()) {
+        emit instagramCarouselFailed(pending.instagramUrl);
+        return;
+    }
+
+    startCarouselVideoEncodes(baseUrl, pending.instagramUrl, pending.items);
+}
+
+void MediaManager::startCarouselVideoEncodes(const QString &baseUrl, const QString &instagramUrl, const QVariantList &items)
+{
     // Video items are muxed at Instagram's own export resolution/profile
     // (yt-dlp's own ffmpeg just combines the separate DASH video+audio
     // streams into one container) -- same "audio fine, video stays black"
