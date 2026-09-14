@@ -149,7 +149,7 @@ NavigationPane {
                     // ForeignWindowControl via the same
                     // "screen:?wingrp=...&winid=..." URL scheme that sample
                     // used.
-                    playing = nativeVideoPlayer.play(videoUrl, "bbportVideoSurface", fwcVideoSurface.windowGroup, fwcVideoSurface.preferredWidth, fwcVideoSurface.preferredHeight);
+                    playing = nativeVideoPlayer.play(videoUrl, "bbportVideoSurface", fwcVideoSurface.windowGroup, fwcVideoSurface.pixelWidth, fwcVideoSurface.pixelHeight);
                 }
                 onVideoUrlChanged: tryStartPlayback()
                 // Called from navigationPane's onPopTransitionEnded (outer
@@ -183,16 +183,39 @@ NavigationPane {
                         // real letterboxing: the surrounding black
                         // background (this Container) shows as the bars.
                         property int maxBox: 720
-                        preferredWidth: {
+                        // Raw physical-pixel values, kept separate from
+                        // preferredWidth/Height below: Cascades layout
+                        // properties are DU by default, and a bare number
+                        // (no ui.px() wrapping) is interpreted as DU, not
+                        // pixels -- confirmed against BlackBerry's own
+                        // helloforeignwindow sample, which always wraps a
+                        // ForeignWindowControl's size in ui.px() for exactly
+                        // this reason. tryStartPlayback() passes these two
+                        // (not preferredWidth/Height, which after ui.px()
+                        // wrapping below no longer hold a pixel count) to
+                        // NativeVideoPlayer.play() as its destWidth/
+                        // destHeight, which mm-renderer needs in real pixels
+                        // to know its own destination rectangle.
+                        // Declared with a plain default, then bound as a
+                        // separate statement below -- a `{...}` block only
+                        // parses as a property's *value* when assigned to an
+                        // already-declared property (like preferredWidth
+                        // used to be bound directly), not as a `property int
+                        // x: {...}` declaration's own initializer.
+                        property int pixelWidth: maxBox
+                        property int pixelHeight: maxBox
+                        pixelWidth: {
                             if (videoWidth <= 0 || videoHeight <= 0) return maxBox;
                             var scale = Math.min(maxBox / videoWidth, maxBox / videoHeight);
                             return Math.round(videoWidth * scale);
                         }
-                        preferredHeight: {
+                        pixelHeight: {
                             if (videoWidth <= 0 || videoHeight <= 0) return maxBox;
                             var scale = Math.min(maxBox / videoWidth, maxBox / videoHeight);
                             return Math.round(videoHeight * scale);
                         }
+                        preferredWidth: ui.px(pixelWidth)
+                        preferredHeight: ui.px(pixelHeight)
                         horizontalAlignment: HorizontalAlignment.Center
                         verticalAlignment: VerticalAlignment.Center
                         windowId: "bbportVideoSurface"
@@ -438,7 +461,7 @@ NavigationPane {
                     // approach as videoViewerPage (see its own comment for
                     // why: bb::multimedia::MediaPlayer rendered solid black
                     // on-device despite binding correctly).
-                    videoPlaying = carouselVideoPlayer.play(activeVideoUrl, "bbportCarouselVideoSurface", fwcCarouselVideoSurface.windowGroup, fwcCarouselVideoSurface.preferredWidth, fwcCarouselVideoSurface.preferredHeight);
+                    videoPlaying = carouselVideoPlayer.play(activeVideoUrl, "bbportCarouselVideoSurface", fwcCarouselVideoSurface.windowGroup, fwcCarouselVideoSurface.maxBox, fwcCarouselVideoSurface.maxBox);
                 }
                 // Called from navigationPane's onPopTransitionEnded (see its
                 // own comment) -- without this mm-renderer keeps playing
@@ -581,9 +604,14 @@ NavigationPane {
                         // "unknown dimensions" fallback, since carousel
                         // items carry no width/height metadata to size
                         // against either) -- same fix here, verbatim.
+                        // preferredWidth/Height wrapped in ui.px() (raw
+                        // pixels, not DU -- see videoViewerPage's own
+                        // fwcVideoSurface comment) so maxBox stays readable
+                        // as-is for NativeVideoPlayer.play()'s destWidth/
+                        // destHeight, which mm-renderer needs in real pixels.
                         property int maxBox: 720
-                        preferredWidth: maxBox
-                        preferredHeight: maxBox
+                        preferredWidth: ui.px(maxBox)
+                        preferredHeight: ui.px(maxBox)
                         horizontalAlignment: HorizontalAlignment.Center
                         verticalAlignment: VerticalAlignment.Center
                         windowId: "bbportCarouselVideoSurface"

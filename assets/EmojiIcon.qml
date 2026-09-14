@@ -10,7 +10,13 @@ import "emojimap.js" as EmojiMap
 Container {
     property string emoji: ""
     property real iconSize: ui.du(3)
-    property color fallbackColor: Color.White
+    // variant, not QML's built-in "color" type: that maps to QColor, but
+    // Color.White is a bb::cascades::Color -- the mismatch this line used to
+    // have was exactly the "Unable to assign bb::cascades::Color to QColor"
+    // warning spamming every real device log this session (found by
+    // comparing against BlackBerry's own Cascades cookbook samples, none of
+    // which ever declare a plain "color" property for a Cascades Color value).
+    property variant fallbackColor: Color.White
     property string resolvedAsset: EmojiMap.emojiAsset(emoji)
 
     layout: DockLayout {}
