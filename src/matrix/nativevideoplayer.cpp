@@ -1,8 +1,10 @@
 #include "nativevideoplayer.hpp"
 
 #include <mm/renderer.h>
+#include <sys/strm.h>
 
 #include <QTimer>
+#include <QByteArray>
 
 #include <sys/stat.h>
 
@@ -35,7 +37,7 @@ void NativeVideoPlayer::onTick()
     emit positionMsChanged();
 }
 
-bool NativeVideoPlayer::play(const QString &fileUrl, const QString &windowId, const QString &windowGroup)
+bool NativeVideoPlayer::play(const QString &fileUrl, const QString &windowId, const QString &windowGroup, int destWidth, int destHeight)
 {
     cleanup();
 
@@ -77,6 +79,21 @@ bool NativeVideoPlayer::play(const QString &fileUrl, const QString &windowId, co
     if (mmr_play(m_context) != 0) {
         cleanup();
         return false;
+    }
+
+    // See the header comment: BlackBerry's own reference sample always
+    // sets this before anything renders. strm_dict_set() consumes its
+    // input dict and returns a new one (or NULL on failure) -- must
+    // reassign at every step, matching that sample's own usage exactly.
+    if (destWidth > 0 && destHeight > 0) {
+        strm_dict_t *dict = strm_dict_new();
+        if (dict) dict = strm_dict_set(dict, "video_dest_x", "0");
+        if (dict) dict = strm_dict_set(dict, "video_dest_y", "0");
+        if (dict) dict = strm_dict_set(dict, "video_dest_w", QByteArray::number(destWidth).constData());
+        if (dict) dict = strm_dict_set(dict, "video_dest_h", QByteArray::number(destHeight).constData());
+        // mmr_output_parameters() takes ownership of dict (destroys it even
+        // on failure) -- never call strm_dict_destroy() on it afterward.
+        if (dict) mmr_output_parameters(m_context, m_videoOutputId, dict);
     }
 
     m_positionMs = 0;

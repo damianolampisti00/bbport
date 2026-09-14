@@ -45,7 +45,14 @@ public:
     // scene (windowGroup is typically ForeignWindowControl.windowGroup,
     // already defaulting to the main Cascades window group). fileUrl is a
     // "file://..." path exactly like MediaManager already hands out.
-    Q_INVOKABLE bool play(const QString &fileUrl, const QString &windowId, const QString &windowGroup);
+    // destWidth/destHeight (pixels, matching that same ForeignWindowControl's
+    // own preferredWidth/preferredHeight) set mm-renderer's video_dest_w/h --
+    // BlackBerry's own reference VideoPlayback sample always sets this via
+    // mmr_output_parameters() before anything is visible; omitting it left
+    // mm-renderer with no defined destination rectangle to render into,
+    // which is plausibly why video stayed black even once every other part
+    // of this class matched that sample.
+    Q_INVOKABLE bool play(const QString &fileUrl, const QString &windowId, const QString &windowGroup, int destWidth, int destHeight);
     Q_INVOKABLE void pause();
     Q_INVOKABLE void resume();
     Q_INVOKABLE void stop();

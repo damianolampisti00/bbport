@@ -149,7 +149,7 @@ NavigationPane {
                     // ForeignWindowControl via the same
                     // "screen:?wingrp=...&winid=..." URL scheme that sample
                     // used.
-                    playing = nativeVideoPlayer.play(videoUrl, "bbportVideoSurface", fwcVideoSurface.windowGroup);
+                    playing = nativeVideoPlayer.play(videoUrl, "bbportVideoSurface", fwcVideoSurface.windowGroup, fwcVideoSurface.preferredWidth, fwcVideoSurface.preferredHeight);
                 }
                 onVideoUrlChanged: tryStartPlayback()
                 // Called from navigationPane's onPopTransitionEnded (outer
@@ -438,7 +438,7 @@ NavigationPane {
                     // approach as videoViewerPage (see its own comment for
                     // why: bb::multimedia::MediaPlayer rendered solid black
                     // on-device despite binding correctly).
-                    videoPlaying = carouselVideoPlayer.play(activeVideoUrl, "bbportCarouselVideoSurface", fwcCarouselVideoSurface.windowGroup);
+                    videoPlaying = carouselVideoPlayer.play(activeVideoUrl, "bbportCarouselVideoSurface", fwcCarouselVideoSurface.windowGroup, fwcCarouselVideoSurface.preferredWidth, fwcCarouselVideoSurface.preferredHeight);
                 }
                 // Called from navigationPane's onPopTransitionEnded (see its
                 // own comment) -- without this mm-renderer keeps playing
