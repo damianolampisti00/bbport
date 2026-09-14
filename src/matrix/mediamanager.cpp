@@ -22,7 +22,6 @@ extern "C" {
 #include <QDir>
 #include <QCryptographicHash>
 #include <QRegExp>
-#include <QSet>
 #include <QUrl>
 #include <QDateTime>
 #include <QTextStream>
@@ -651,48 +650,46 @@ void MediaManager::finishCarouselJob(QProcess *proc, bool succeeded)
     // yt-dlp's Instagram extractor tries to resolve "video formats" for
     // every entry of a mixed photo+video carousel and errors out on the
     // photo ones ("No video formats found!") -- a known, maintainer-closed
-    // wontfix limitation (github.com/yt-dlp/yt-dlp issue #7569), confirmed
-    // via a real device log: 3 of this carousel's 4 slides (the photos)
-    // never produced a file even though yt-dlp itself reported "Downloading
-    // 4 items of 4". Rather than accept a partial carousel, missing indices
-    // get retried individually via Instagram's own "?img_index=N" per-slide
-    // link (see finishCarouselSlideFetch()'s doc comment) before moving on
-    // to video re-encoding.
-    QRegExp countRe("Downloading\\s+\\d+\\s+items?\\s+of\\s+(\\d+)");
-    int totalSlides = (countRe.indexIn(stdOut) >= 0) ? countRe.cap(1).toInt() : -1;
-
-    QSet<int> presentIndices;
-    QRegExp indexRe(QRegExp::escape(prefixInfo.fileName()) + "_(\\d+)\\..*");
-    foreach (const QString &name, matches) {
-        if (indexRe.exactMatch(name)) presentIndices.insert(indexRe.cap(1).toInt());
+    // wontfix limitation (github.com/yt-dlp/yt-dlp issue #7569). Instagram's
+    // own "?img_index=N" per-slide link does NOT work around this --
+    // confirmed on a real device that yt-dlp ignores the query string
+    // entirely and just re-runs the exact same full-carousel extraction
+    // (same "No video formats found!" errors, plus a redundant duplicate
+    // download of the one video slide each time). What actually identifies
+    // a missing slide is its OWN shortcode, which yt-dlp already prints
+    // in the error line itself: "[Instagram] <shortcode>: No video formats
+    // found!". Each carousel child has its own permalink
+    // (instagram.com/p/<shortcode>/), independent of the parent post's, and
+    // fetching that directly goes through the exact same single-post
+    // extraction path already proven correct for a plain, non-carousel
+    // Instagram photo post.
+    QStringList missingShortcodes;
+    QRegExp shortcodeRe("\\[Instagram\\] ([A-Za-z0-9_-]+): No video formats found!");
+    int scanPos = 0;
+    while ((scanPos = shortcodeRe.indexIn(stdErr, scanPos)) != -1) {
+        QString code = shortcodeRe.cap(1);
+        if (!missingShortcodes.contains(code)) missingShortcodes.append(code);
+        scanPos += shortcodeRe.matchedLength();
     }
 
-    QList<int> missingIndices;
-    // Instagram's own UI caps a carousel at 10 slides -- also guards against
-    // a stdout parse going wrong and looping some huge bogus count.
-    for (int i = 1; i <= totalSlides && i <= 10; ++i) {
-        if (!presentIndices.contains(i)) missingIndices.append(i);
-    }
-
-    if (missingIndices.isEmpty()) {
+    if (missingShortcodes.isEmpty()) {
         startCarouselVideoEncodes(baseUrl, instagramUrl, items);
         return;
     }
 
-    debugLog(QString("yt-dlp (carousel) %1 of %2 slide(s) missing from the playlist run -- retrying individually via img_index")
-                 .arg(missingIndices.size()).arg(totalSlides));
+    debugLog(QString("yt-dlp (carousel) %1 slide(s) missing from the playlist run -- retrying individually by shortcode")
+                 .arg(missingShortcodes.size()));
 
     CarouselSlideFetchPending slidePending;
     slidePending.instagramUrl = instagramUrl;
     slidePending.items = items;
     slidePending.pendingFetches = 0;
 
-    foreach (int idx, missingIndices) {
-        QString slotPrefix = outPrefix + QString("_img%1").arg(idx, 2, 10, QChar('0'));
+    for (int i = 0; i < missingShortcodes.size(); ++i) {
+        const QString &code = missingShortcodes.at(i);
+        QString slotPrefix = outPrefix + QString("_sc%1").arg(i, 2, 10, QChar('0'));
         QString outTemplate = slotPrefix + ".%(ext)s";
-        // baseUrl is always query-string-free (see carouselBaseUrl()), so
-        // this never needs an "&" instead of "?".
-        QString slideUrl = baseUrl + "?img_index=" + QString::number(idx);
+        QString slideUrl = "https://www.instagram.com/p/" + code + "/";
 
         QStringList args;
         args << "-m" << "yt_dlp"
@@ -701,7 +698,7 @@ void MediaManager::finishCarouselJob(QProcess *proc, bool succeeded)
              << "-o" << outTemplate
              << slideUrl;
 
-        debugLog(QString("yt-dlp (carousel) fetching missing slide %1: %2").arg(idx).arg(slideUrl));
+        debugLog(QString("yt-dlp (carousel) fetching missing slide %1: %2").arg(code).arg(slideUrl));
 
         CarouselSlideFetchJob job;
         job.baseUrl = baseUrl;
@@ -864,6 +861,12 @@ void MediaManager::onCarouselEncodeError(QProcess::ProcessError error)
 void MediaManager::finishCarouselEncodeJob(QProcess *proc, bool succeeded)
 {
     CarouselVideoEncodeJob job = m_carouselEncodeJobs.take(proc);
+    if (!succeeded) {
+        debugLog(QString("yt-dlp (carousel) ffmpeg re-encode failed exitCode=%1: %2")
+                     .arg(proc->exitCode()).arg(job.inPath));
+        QString ffmpegErr = QString::fromUtf8(proc->readAllStandardError());
+        if (!ffmpegErr.isEmpty()) debugLog("  ffmpeg stderr: " + ffmpegErr.right(2000));
+    }
     proc->deleteLater();
 
     if (!m_carouselPending.contains(job.baseUrl)) {
