@@ -196,24 +196,19 @@ NavigationPane {
                         // NativeVideoPlayer.play() as its destWidth/
                         // destHeight, which mm-renderer needs in real pixels
                         // to know its own destination rectangle.
-                        // Declared with a plain default, then bound as a
-                        // separate statement below -- a `{...}` block only
-                        // parses as a property's *value* when assigned to an
-                        // already-declared property (like preferredWidth
-                        // used to be bound directly), not as a `property int
-                        // x: {...}` declaration's own initializer.
-                        property int pixelWidth: maxBox
-                        property int pixelHeight: maxBox
-                        pixelWidth: {
-                            if (videoWidth <= 0 || videoHeight <= 0) return maxBox;
-                            var scale = Math.min(maxBox / videoWidth, maxBox / videoHeight);
-                            return Math.round(videoWidth * scale);
-                        }
-                        pixelHeight: {
-                            if (videoWidth <= 0 || videoHeight <= 0) return maxBox;
-                            var scale = Math.min(maxBox / videoWidth, maxBox / videoHeight);
-                            return Math.round(videoHeight * scale);
-                        }
+                        // A single ternary expression, not a `{...}` block:
+                        // confirmed on-device (a real "Property value set
+                        // multiple times" fatal QML load error, breaking the
+                        // whole app) that neither `property int x: {...}`
+                        // nor "declare with a default, then rebind
+                        // separately" is valid here -- a custom property
+                        // declaration's initializer must be one expression,
+                        // and can only ever be assigned once in the same
+                        // object.
+                        property int pixelWidth: (videoWidth <= 0 || videoHeight <= 0) ? maxBox
+                                : Math.round(videoWidth * Math.min(maxBox / videoWidth, maxBox / videoHeight))
+                        property int pixelHeight: (videoWidth <= 0 || videoHeight <= 0) ? maxBox
+                                : Math.round(videoHeight * Math.min(maxBox / videoWidth, maxBox / videoHeight))
                         preferredWidth: ui.px(pixelWidth)
                         preferredHeight: ui.px(pixelHeight)
                         horizontalAlignment: HorizontalAlignment.Center
