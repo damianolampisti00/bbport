@@ -137,9 +137,19 @@ static const char *kInstagramFetchScript =
     "        print('FAIL %d %s' % (idx, e))\n";
 
 // ffmpeg needs BerryCore's LD_LIBRARY_PATH (built against its bundled QNX
-// target tree, not BBNDK's), and parth-dl needs BerryCore's own site-
-// packages on PATH/PYTHONPATH via the same mechanism pip installed it
-// through. Mirrors berrycore/env.sh exactly.
+// target tree, not BBNDK's). Mirrors berrycore/env.sh exactly.
+//
+// SSL_CERT_FILE is the standard OpenSSL/Python env var most TLS libraries
+// (including stdlib ssl.create_default_context(), which parth-dl's own
+// networking uses) check for a CA bundle -- confirmed necessary on a real
+// device: parth-dl's own HTTPS calls failed with "CERTIFICATE_VERIFY_
+// FAILED: unable to get local issuer certificate" without it, this
+// environment's Python having no usable system trust store of its own
+// (the same underlying gap --no-check-certificate papered over for
+// yt-dlp). Pointing it at BBport's own already-bundled, already-proven-
+// working CA bundle (the exact same file tlsnetworkreply.cpp's mbedTLS
+// layer parses) fixes every Python HTTPS call spawned through this
+// environment at once, with no per-library workaround needed.
 static QProcessEnvironment berryCoreEnvironment()
 {
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
@@ -148,6 +158,7 @@ static QProcessEnvironment berryCoreEnvironment()
     QString ldLibraryPath = root + "/target_10_3_1_995/qnx6/armle-v7/usr/lib:" + root + "/lib:" + env.value("LD_LIBRARY_PATH");
     env.insert("PATH", path);
     env.insert("LD_LIBRARY_PATH", ldLibraryPath);
+    env.insert("SSL_CERT_FILE", QDir::currentPath() + "/app/native/assets/cacert.pem");
     return env;
 }
 
