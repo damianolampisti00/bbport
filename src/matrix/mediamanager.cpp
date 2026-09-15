@@ -43,64 +43,79 @@ static const char *kBerryCorePython3 = "/accounts/1000/shared/misc/berrycore/bin
 
 // yt-dlp can't download a mixed Instagram carousel's photo entries at all
 // (see the doc comment above the "?img_index=N" / shortcode dead end in
-// finishCarouselJob()) -- this scrapes the same post page yt-dlp itself
-// already fetches for each missing slide's "display_url" (the sidecar
-// child's direct CDN image URL, embedded as inline JSON in the page HTML)
-// and downloads it directly, bypassing yt-dlp's broken photo-format
-// resolution entirely. Invoked as `python3 -c <this> <postUrl> <outPrefix>
-// <comma-separated 1-based missing indices>`; writes each found image to
+// finishCarouselJob()), and scraping the plain post page's HTML for an
+// embedded "display_url" JSON blob (an earlier attempt) turned out to be a
+// dead end too -- confirmed on a real device that anonymous requests get a
+// full, legitimate 600KB+ page with no such JSON at all any more (modern
+// Instagram loads post data client-side via JS after the initial render,
+// not server-embedded).
+//
+// What actually still works anonymously: Instagram's own web client calls
+// a legacy GraphQL endpoint by shortcode, identified by a fixed doc_id, and
+// only needs one extra header (the public numeric web-client "app ID") to
+// be treated as a real browser request instead of a blocked bot -- this is
+// the same endpoint/header pair used by other no-login Instagram scrapers
+// (e.g. parth-dl's extractors.py: i.instagram.com/instagram.com's own
+// X-IG-App-ID 936619743392459). The response is real JSON with each
+// sidecar child's "display_url" directly in edge_sidecar_to_children,
+// unrelated to yt-dlp's broken photo-format walk entirely.
+//
+// Invoked as `python3 -c <this> <postUrl> <outPrefix> <comma-separated
+// 1-based missing indices>`; writes each found image to
 // "<outPrefix><NN>.jpg" and prints one "OK N url" / "FAIL N reason" /
 // "MISSING_INDEX N" line per requested index for debugLog to capture.
 static const char *kCarouselPhotoScrapeScript =
-    "import sys, re, json, ssl, urllib.request\n"
-    "\n"
-    "def unescape(s):\n"
-    "    try:\n"
-    "        return json.loads('\"' + s + '\"')\n"
-    "    except Exception:\n"
-    "        return s\n"
+    "import sys, re, json, ssl, urllib.request, urllib.parse\n"
     "\n"
     "url, out_prefix, missing_str = sys.argv[1], sys.argv[2], sys.argv[3]\n"
     "missing = [int(x) for x in missing_str.split(',') if x]\n"
+    "\n"
+    "m = re.search(r'/p/([^/?]+)', url)\n"
+    "shortcode = m.group(1) if m else ''\n"
     "\n"
     "ctx = ssl.create_default_context()\n"
     "ctx.check_hostname = False\n"
     "ctx.verify_mode = ssl.CERT_NONE\n"
     "\n"
     "ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'\n"
-    "req = urllib.request.Request(url, headers={'User-Agent': ua, 'Accept-Language': 'en-US,en;q=0.9'})\n"
-    "html = ''\n"
+    "variables = json.dumps({'shortcode': shortcode})\n"
+    "gql_url = 'https://www.instagram.com/graphql/query/?doc_id=8845758582119845&variables=' + urllib.parse.quote(variables)\n"
+    "headers = {\n"
+    "    'User-Agent': ua,\n"
+    "    'X-IG-App-ID': '936619743392459',\n"
+    "    'Accept': '*/*',\n"
+    "    'Referer': 'https://www.instagram.com/p/%s/' % shortcode,\n"
+    "}\n"
+    "\n"
+    "ordered = []\n"
     "try:\n"
+    "    req = urllib.request.Request(gql_url, headers=headers)\n"
     "    resp = urllib.request.urlopen(req, context=ctx, timeout=20)\n"
     "    raw = resp.read()\n"
-    "    print('fetched status=%s len=%d final_url=%s' % (resp.getcode(), len(raw), resp.geturl()))\n"
-    "    html = raw.decode('utf-8', 'ignore')\n"
+    "    print('gql fetched status=%s len=%d' % (resp.getcode(), len(raw)))\n"
+    "    data = json.loads(raw.decode('utf-8', 'ignore'))\n"
+    "    media = (data.get('data') or {}).get('xdt_shortcode_media') or {}\n"
+    "    edges = ((media.get('edge_sidecar_to_children') or {}).get('edges')) or []\n"
+    "    print('edges=%d' % len(edges))\n"
+    "    for e in edges:\n"
+    "        node = e.get('node') or {}\n"
+    "        ordered.append(node.get('display_url'))\n"
+    "    if not edges and media.get('display_url'):\n"
+    "        ordered.append(media.get('display_url'))\n"
     "except Exception as e:\n"
-    "    print('FETCH_FAILED %s' % e)\n"
+    "    print('GQL_FAILED %s' % e)\n"
     "\n"
-    "raw_urls = re.findall(r'\"display_url\":\"([^\"]+)\"', html)\n"
-    "seen = set()\n"
-    "ordered = []\n"
-    "for u in raw_urls:\n"
-    "    real = unescape(u)\n"
-    "    if real not in seen:\n"
-    "        seen.add(real)\n"
-    "        ordered.append(real)\n"
-    "\n"
-    "print('found %d display_url candidate(s)' % len(ordered))\n"
-    "if not ordered:\n"
-    "    print('html_has_login=%s html_has_checkpoint=%s' % ('login' in html.lower(), 'checkpoint' in html.lower()))\n"
-    "    print('html_snippet=%s' % repr(html[:300]))\n"
+    "print('found %d display_url candidate(s)' % len([u for u in ordered if u]))\n"
     "\n"
     "for idx in missing:\n"
-    "    if idx - 1 >= len(ordered):\n"
+    "    if idx - 1 >= len(ordered) or not ordered[idx - 1]:\n"
     "        print('MISSING_INDEX %d' % idx)\n"
     "        continue\n"
     "    img_url = ordered[idx - 1]\n"
     "    try:\n"
-    "        data = urllib.request.urlopen(urllib.request.Request(img_url, headers={'User-Agent': ua}), context=ctx, timeout=20).read()\n"
+    "        data2 = urllib.request.urlopen(urllib.request.Request(img_url, headers={'User-Agent': ua}), context=ctx, timeout=20).read()\n"
     "        with open('%s%02d.jpg' % (out_prefix, idx), 'wb') as f:\n"
-    "            f.write(data)\n"
+    "            f.write(data2)\n"
     "        print('OK %d %s' % (idx, img_url))\n"
     "    except Exception as e:\n"
     "        print('FAIL %d %s' % (idx, e))\n";
