@@ -927,10 +927,16 @@ void MediaManager::finishCarouselEncodeJob(QProcess *proc, bool succeeded)
 {
     CarouselVideoEncodeJob job = m_carouselEncodeJobs.take(proc);
     if (!succeeded) {
-        debugLog(QString("yt-dlp (carousel) ffmpeg re-encode failed exitCode=%1: %2")
-                     .arg(proc->exitCode()).arg(job.inPath));
+        debugLog(QString("yt-dlp (carousel) ffmpeg re-encode failed exitCode=%1 crashed=%2 inSize=%3: %4")
+                     .arg(proc->exitCode())
+                     .arg(proc->exitStatus() == QProcess::CrashExit)
+                     .arg(QFileInfo(job.inPath).size())
+                     .arg(job.inPath));
+        QString ffmpegOut = QString::fromUtf8(proc->readAllStandardOutput());
         QString ffmpegErr = QString::fromUtf8(proc->readAllStandardError());
+        if (!ffmpegOut.isEmpty()) debugLog("  ffmpeg stdout: " + ffmpegOut.right(2000));
         if (!ffmpegErr.isEmpty()) debugLog("  ffmpeg stderr: " + ffmpegErr.right(2000));
+        else debugLog("  ffmpeg stderr: (empty)");
     }
     proc->deleteLater();
 
