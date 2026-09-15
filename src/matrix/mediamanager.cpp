@@ -51,46 +51,65 @@ static const char *kBerryCorePython3 = "/accounts/1000/shared/misc/berrycore/bin
 // not server-embedded).
 //
 // What actually still works anonymously: Instagram's own web client calls
-// a legacy GraphQL endpoint by shortcode, identified by a fixed doc_id, and
-// only needs one extra header (the public numeric web-client "app ID") to
-// be treated as a real browser request instead of a blocked bot -- this is
-// the same endpoint/header pair used by other no-login Instagram scrapers
-// (e.g. parth-dl's extractors.py: i.instagram.com/instagram.com's own
-// X-IG-App-ID 936619743392459). The response is real JSON with each
-// sidecar child's "display_url" directly in edge_sidecar_to_children,
-// unrelated to yt-dlp's broken photo-format walk entirely.
+// a legacy GraphQL endpoint by shortcode, identified by a fixed doc_id.
+// This is the same endpoint/header pair used by other no-login Instagram
+// scrapers (e.g. parth-dl's extractors.py: X-IG-App-ID 936619743392459).
+// A first attempt using only that header got HTTP 401 on a real device --
+// Instagram's anonymous/"guest" access to this endpoint also checks for
+// the same csrftoken/mid/ig_did cookies a real browser picks up on its
+// very first page visit, plus an X-CSRFToken header matching that cookie
+// (the standard anti-CSRF pattern, enforced here even though this is a
+// GET). So this primes an anonymous session by fetching the plain post
+// page first (through a cookie jar), then reuses those cookies plus the
+// resulting csrftoken for the actual GraphQL call. The response is real
+// JSON with each sidecar child's "display_url" directly in
+// edge_sidecar_to_children, unrelated to yt-dlp's broken photo-format
+// walk entirely.
 //
 // Invoked as `python3 -c <this> <postUrl> <outPrefix> <comma-separated
 // 1-based missing indices>`; writes each found image to
 // "<outPrefix><NN>.jpg" and prints one "OK N url" / "FAIL N reason" /
 // "MISSING_INDEX N" line per requested index for debugLog to capture.
 static const char *kCarouselPhotoScrapeScript =
-    "import sys, re, json, ssl, urllib.request, urllib.parse\n"
+    "import sys, re, json, ssl, http.cookiejar, urllib.request, urllib.parse\n"
     "\n"
     "url, out_prefix, missing_str = sys.argv[1], sys.argv[2], sys.argv[3]\n"
     "missing = [int(x) for x in missing_str.split(',') if x]\n"
     "\n"
     "m = re.search(r'/p/([^/?]+)', url)\n"
     "shortcode = m.group(1) if m else ''\n"
+    "post_url = 'https://www.instagram.com/p/%s/' % shortcode\n"
     "\n"
     "ctx = ssl.create_default_context()\n"
     "ctx.check_hostname = False\n"
     "ctx.verify_mode = ssl.CERT_NONE\n"
     "\n"
     "ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'\n"
-    "variables = json.dumps({'shortcode': shortcode})\n"
-    "gql_url = 'https://www.instagram.com/graphql/query/?doc_id=8845758582119845&variables=' + urllib.parse.quote(variables)\n"
-    "headers = {\n"
-    "    'User-Agent': ua,\n"
-    "    'X-IG-App-ID': '936619743392459',\n"
-    "    'Accept': '*/*',\n"
-    "    'Referer': 'https://www.instagram.com/p/%s/' % shortcode,\n"
-    "}\n"
+    "cj = http.cookiejar.CookieJar()\n"
+    "opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx), urllib.request.HTTPCookieProcessor(cj))\n"
     "\n"
     "ordered = []\n"
     "try:\n"
+    "    prime = urllib.request.Request(post_url, headers={'User-Agent': ua, 'Accept-Language': 'en-US,en;q=0.9'})\n"
+    "    opener.open(prime, timeout=20).read()\n"
+    "    csrftoken = ''\n"
+    "    for c in cj:\n"
+    "        if c.name == 'csrftoken':\n"
+    "            csrftoken = c.value\n"
+    "    print('primed cookies=%d csrftoken=%s' % (len(list(cj)), bool(csrftoken)))\n"
+    "\n"
+    "    variables = json.dumps({'shortcode': shortcode})\n"
+    "    gql_url = 'https://www.instagram.com/graphql/query/?doc_id=8845758582119845&variables=' + urllib.parse.quote(variables)\n"
+    "    headers = {\n"
+    "        'User-Agent': ua,\n"
+    "        'X-IG-App-ID': '936619743392459',\n"
+    "        'X-CSRFToken': csrftoken,\n"
+    "        'X-Requested-With': 'XMLHttpRequest',\n"
+    "        'Accept': '*/*',\n"
+    "        'Referer': post_url,\n"
+    "    }\n"
     "    req = urllib.request.Request(gql_url, headers=headers)\n"
-    "    resp = urllib.request.urlopen(req, context=ctx, timeout=20)\n"
+    "    resp = opener.open(req, timeout=20)\n"
     "    raw = resp.read()\n"
     "    print('gql fetched status=%s len=%d' % (resp.getcode(), len(raw)))\n"
     "    data = json.loads(raw.decode('utf-8', 'ignore'))\n"
@@ -334,7 +353,6 @@ void MediaManager::onDownloadFinished()
         args << "-y" << "-i" << inPath
              << "-vf" << "scale='min(1280,iw)':-2"
              << "-c:v" << "libx264" << "-profile:v" << "high" << "-level" << "4.0"
-             << "-preset" << "fast"
              << "-b:v" << "2500k" << "-maxrate" << "2500k" << "-bufsize" << "5000k"
              << "-c:a" << "aac" << "-b:a" << "128k" << "-ar" << "44100"
              << "-movflags" << "+faststart"
@@ -896,7 +914,6 @@ void MediaManager::startCarouselVideoEncodes(const QString &baseUrl, const QStri
         args << "-y" << "-i" << inPath
              << "-vf" << "scale='min(1280,iw)':-2"
              << "-c:v" << "libx264" << "-profile:v" << "high" << "-level" << "4.0"
-             << "-preset" << "fast"
              << "-b:v" << "2500k" << "-maxrate" << "2500k" << "-bufsize" << "5000k"
              << "-c:a" << "aac" << "-b:a" << "128k" << "-ar" << "44100"
              << "-movflags" << "+faststart"
