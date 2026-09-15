@@ -843,9 +843,16 @@ void MediaManager::onAudioTranscodeError(QProcess::ProcessError error)
 void MediaManager::finishAudioTranscodeJob(QProcess *proc, bool succeeded)
 {
     AudioUploadJob job = m_audioUploadJobs.take(proc);
+
+    debugLog(QString("audio transcode finished path=%1 succeeded=%2 exitCode=%3")
+                 .arg(job.originalPath).arg(succeeded).arg(proc->exitCode()));
+    QString stdErr = QString::fromUtf8(proc->readAllStandardError());
+    if (!stdErr.isEmpty()) debugLog("  ffmpeg stderr: " + stdErr.left(1500));
+
     proc->deleteLater();
 
     bool haveOgg = succeeded && QFile::exists(job.outPath);
+    if (!haveOgg) debugLog("  falling back to untranscoded m4a upload");
     QString uploadPath = haveOgg ? job.outPath : job.originalPath;
     if (haveOgg) m_uploadPathRemap[uploadPath] = job.originalPath;
     else QFile::remove(job.outPath);
