@@ -61,26 +61,27 @@ public:
     // SyncEngine/MessageListModel's extractMediaFields(), which flags these
     // via content.external_url) -- the Beeper Instagram bridge never gives
     // BBport an actual playable video, just a thumbnail and this link.
-    // Fetching shells out (via QProcess) to BerryCore's on-device youtube-dl
-    // binary, which extracts and downloads the real video (fragile: breaks
-    // if Instagram changes their page markup, or if the linked post isn't
-    // actually a video/Reel).
+    // Fetching shells out (via QProcess) to parth-dl (a maintained,
+    // pip-installed Python library, github.com/parthmax2/parth-dl), which
+    // extracts and downloads the real video with no login -- see
+    // startInstagramFetch()'s doc comment for why this replaced an earlier
+    // yt-dlp-based implementation entirely.
     Q_INVOKABLE QString fetchInstagramVideo(const QString &instagramUrl);
 
     // Returns the cached carousel slides -- [{type: "image"|"video", url:
     // "file://..."}, ...] in carousel order -- if already fetched;
     // otherwise starts an async fetch (instagramCarouselReady() fires
     // later) and returns an empty list. instagramUrl is the same post-page
-    // link fetchInstagramVideo() takes, but here yt-dlp is asked to grab
-    // the WHOLE carousel (Instagram's multi-image/video "swipe" posts) via
-    // its playlist support, one file per slide, instead of a single Reel.
-    // A specific slide's own share link carries a carousel_share_child_
-    // media_id query parameter identifying which slide was shared -- QML
-    // uses that to decide whether to open this single-image viewer or this
-    // gallery, but fetching/caching here is always keyed by the base post
-    // URL (query string stripped) so every slide of the same carousel
-    // shares one cached result regardless of which one was actually shared
-    // into the chat -- see conversation.
+    // link fetchInstagramVideo() takes, but here parth-dl is asked for the
+    // WHOLE carousel (Instagram's multi-image/video "swipe" posts) -- every
+    // slide, image and video alike, in one call. A specific slide's own
+    // share link carries a carousel_share_child_media_id query parameter
+    // identifying which slide was shared -- QML uses that to decide whether
+    // to open this single-image viewer or this gallery, but fetching/
+    // caching here is always keyed by the base post URL (query string
+    // stripped) so every slide of the same carousel shares one cached
+    // result regardless of which one was actually shared into the chat --
+    // see conversation.
     Q_INVOKABLE QVariantList fetchInstagramCarousel(const QString &instagramUrl);
 
     // Transcodes localFilePath (the AudioRecorder's own m4a/AAC output) to
@@ -132,15 +133,9 @@ private slots:
     void onThumbnailDownloadFinished();
     void onFfmpegFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void onFfmpegError(QProcess::ProcessError error);
-    void onYoutubeDlFinished(int exitCode, QProcess::ExitStatus exitStatus);
-    void onYoutubeDlError(QProcess::ProcessError error);
-    void onCarouselYoutubeDlFinished(int exitCode, QProcess::ExitStatus exitStatus);
-    void onCarouselYoutubeDlError(QProcess::ProcessError error);
-    void onCarouselTimeout();
-    void onCarouselEncodeFinished(int exitCode, QProcess::ExitStatus exitStatus);
-    void onCarouselEncodeError(QProcess::ProcessError error);
-    void onCarouselSlideFetchFinished(int exitCode, QProcess::ExitStatus exitStatus);
-    void onCarouselSlideFetchError(QProcess::ProcessError error);
+    void onInstagramFetchFinished(int exitCode, QProcess::ExitStatus exitStatus);
+    void onInstagramFetchError(QProcess::ProcessError error);
+    void onInstagramFetchTimeout();
     void onAudioTranscodeFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void onAudioTranscodeError(QProcess::ProcessError error);
 
@@ -161,46 +156,16 @@ private:
     // sha256 mismatch against info.sha256 (skipped if info.sha256 is empty).
     static bool decryptFile(const QByteArray &ciphertext, const CryptoInfo &info, QByteArray *plaintextOut);
     void finishFfmpegJob(QProcess *proc, bool succeeded);
-    void finishYoutubeDlJob(QProcess *proc, bool succeeded);
     void finishAudioTranscodeJob(QProcess *proc, bool succeeded);
-    void finishCarouselJob(QProcess *proc, bool succeeded);
-    // Video slides yt-dlp downloads are muxed at Instagram's own export
-    // resolution/profile (just DASH video+audio combined into one
-    // container), which the Q5's hardware decoder can't handle -- same
-    // "audio fine, video stays black" limitation as regular video
-    // messages (see resolve()'s isVideo branch, whose exact ffmpeg args
-    // this reuses). Confirmed on-device: sizing the ForeignWindowControl
-    // correctly (matching videoViewerPage) did not fix a black carousel
-    // video, pointing at a codec/profile problem rather than a window-
-    // binding one.
-    void finishCarouselEncodeJob(QProcess *proc, bool succeeded);
-    // Starts the video-re-encode fan-out (see finishCarouselEncodeJob's
-    // comment) for the given, already-final item list, then finalizes
-    // immediately if none of them are video. Shared by finishCarouselJob()
-    // (no photo slides were missing) and finishCarouselSlideFetch()'s last
-    // caller (photo slides needed the per-slide img_index retry below).
-    void startCarouselVideoEncodes(const QString &baseUrl, const QString &instagramUrl, const QVariantList &items);
-    // Emits instagramCarouselReady/Failed once every video item's re-encode
-    // (if any) has finished -- a no-op (returns immediately) while any are
-    // still pending.
-    void finalizeCarouselIfDone(const QString &baseUrl);
-    // yt-dlp's Instagram extractor tries to resolve "video formats" for
-    // every entry of a mixed photo+video carousel and errors out on the
-    // photo ones ("No video formats found!") -- confirmed a known,
-    // maintainer-closed-wontfix yt-dlp limitation (github.com/yt-dlp/yt-dlp
-    // issue #7569), not something fixable via a flag on the single
-    // --yes-playlist run finishCarouselJob() already does. Instagram's own
-    // "<post url>?img_index=N" (a real, documented, 1-based per-slide link)
-    // lets a missing slide be fetched on its own, going through the exact
-    // same single-post extraction path that already works correctly for a
-    // plain (non-carousel) Instagram photo post. finishCarouselJob() kicks
-    // this off for whichever indices its own glob didn't produce, up to
-    // the total slide count yt-dlp itself already printed in its stdout.
-    void finishCarouselSlideFetch(QProcess *proc, bool succeeded);
-    // No-op (returns immediately) while any per-slide fetch is still
-    // pending; once all have landed, merges their results into the
-    // already-known items and proceeds to startCarouselVideoEncodes().
-    void finalizeCarouselSlideFetchesIfDone(const QString &baseUrl);
+    // Shared by fetchInstagramVideo() and fetchInstagramCarousel() -- see
+    // its own doc comment in the .cpp for why parth-dl replaced an earlier
+    // yt-dlp-based implementation entirely (yt-dlp can't get a mixed
+    // carousel's photo entries at all; parth-dl's get_info() API returns
+    // every entry, video and photos alike, with no login). isCarousel
+    // picks which of instagramVideoReady/Failed vs. instagramCarouselReady/
+    // Failed finishInstagramFetch() emits.
+    void startInstagramFetch(const QString &instagramUrl, const QString &fetchUrl, const QString &outPrefix, bool isCarousel);
+    void finishInstagramFetch(QProcess *proc, bool succeeded);
     // Strips any query string -- see fetchInstagramCarousel()'s doc comment
     // for why the base post URL, not a specific slide's own link, is the
     // actual cache/fetch key.
@@ -221,28 +186,10 @@ private:
         QString outPath;
     };
 
-    struct CarouselVideoEncodeJob {
-        QString baseUrl;
-        QString inPath;   // yt-dlp's raw muxed output, removed once re-encode succeeds
-        QString outPath;  // Q5-compatible re-encoded file
-        int itemIndex;    // position within CarouselPending::items to patch
-    };
-
-    struct CarouselPending {
-        QString instagramUrl;
-        QVariantList items;   // "video" entries get their url patched in place as encodes land
-        int pendingEncodes;
-    };
-
-    struct CarouselSlideFetchJob {
-        QString baseUrl;
-        QString slotPrefix; // this one fetch's own unique output prefix, globbed afterward for its real filename/extension
-    };
-
-    struct CarouselSlideFetchPending {
-        QString instagramUrl;
-        QVariantList items; // phase-1 (playlist run) items, before any missing slides are merged in
-        int pendingFetches;
+    struct InstagramFetchJob {
+        QString instagramUrl; // the exact link callers/signals identify the request by
+        QString outPrefix;    // globbed afterward for every "<outPrefix>_NN.<ext>" file parth-dl produced
+        bool isCarousel;      // picks instagramVideoReady/Failed vs. instagramCarouselReady/Failed
     };
 
     MatrixApi *m_api;
@@ -257,23 +204,16 @@ private:
     QSet<QString> m_thumbInFlight; // cache paths currently being fetched
     QHash<QNetworkReply*, QString> m_thumbDownloadTarget; // reply -> mxcUri
     QHash<QNetworkReply*, QString> m_thumbCachePath; // reply -> its cache path
-    QHash<QProcess*, QString> m_ytdlTarget; // process -> instagramUrl
-    QHash<QProcess*, QString> m_ytdlOutTemplate; // process -> youtube-dl -o template (to locate the actual output file)
-    QHash<QProcess*, QString> m_carouselTarget; // process -> instagramUrl (the exact slide link that was tapped, for the signal's identity)
-    QHash<QProcess*, QString> m_carouselOutPrefix; // process -> output filename prefix (to glob the resulting per-slide files)
-    // A carousel fetch expands into a whole yt-dlp playlist run (multiple
-    // slides, each its own network fetch) instead of one Reel's single
-    // download -- if Instagram serves a login/consent wall or otherwise
-    // hangs mid-playlist, yt-dlp can sit with no output and no exit forever.
-    // Without this watchdog, that leaves the QML gallery's "Caricamento
+    QHash<QProcess*, InstagramFetchJob> m_instagramFetchJobs;
+    // A carousel fetch can involve several of parth-dl's own network
+    // round trips (one per entry) instead of one Reel's single download --
+    // if Instagram serves a login/consent wall or otherwise stalls, the
+    // Python process can sit with no output and no exit forever. Without
+    // this watchdog, that leaves the QML gallery's "Caricamento
     // carosello..." overlay stuck permanently, since neither
     // instagramCarouselReady nor instagramCarouselFailed would ever fire.
-    QHash<QProcess*, QTimer*> m_carouselProcTimer; // process -> its watchdog timer (cleared on normal finish)
-    QHash<QTimer*, QProcess*> m_carouselTimeoutTarget; // watchdog timer -> the process it guards
-    QHash<QProcess*, CarouselVideoEncodeJob> m_carouselEncodeJobs;
-    QHash<QString, CarouselPending> m_carouselPending; // baseUrl -> items awaiting any in-flight video re-encodes
-    QHash<QProcess*, CarouselSlideFetchJob> m_carouselSlideJobs;
-    QHash<QString, CarouselSlideFetchPending> m_carouselSlideFetchPending; // baseUrl -> phase-1 items awaiting any missing-slide (img_index) fetches
+    QHash<QProcess*, QTimer*> m_instagramProcTimer; // process -> its watchdog timer (cleared on normal finish)
+    QHash<QTimer*, QProcess*> m_instagramTimeoutTarget; // watchdog timer -> the process it guards
     QHash<QProcess*, AudioUploadJob> m_audioUploadJobs;
     QHash<QString, QString> m_uploadPathRemap; // transcoded temp path -> original path, consumed in onUploadFinished
     bb::system::InvokeManager *m_invokeManager;
