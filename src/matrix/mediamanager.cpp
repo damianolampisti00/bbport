@@ -934,9 +934,23 @@ void MediaManager::finishCarouselEncodeJob(QProcess *proc, bool succeeded)
                      .arg(job.inPath));
         QString ffmpegOut = QString::fromUtf8(proc->readAllStandardOutput());
         QString ffmpegErr = QString::fromUtf8(proc->readAllStandardError());
-        if (!ffmpegOut.isEmpty()) debugLog("  ffmpeg stdout: " + ffmpegOut.right(2000));
-        if (!ffmpegErr.isEmpty()) debugLog("  ffmpeg stderr: " + ffmpegErr.right(2000));
-        else debugLog("  ffmpeg stderr: (empty)");
+        // The on-device console view truncates any single long line, which
+        // was hiding ffmpeg's actual error behind its own (large, boring)
+        // version/configuration banner every time -- split on real
+        // newlines and log only the tail as short, separate lines so the
+        // part that actually matters survives console truncation.
+        if (!ffmpegErr.isEmpty()) {
+            QStringList errLines = ffmpegErr.split('\n', QString::SkipEmptyParts);
+            int start = qMax(0, errLines.size() - 10);
+            debugLog(QString("  ffmpeg stderr: %1 line(s) total, showing last %2")
+                         .arg(errLines.size()).arg(errLines.size() - start));
+            for (int i = start; i < errLines.size(); ++i) {
+                debugLog(QString("  ffmpeg[%1]: %2").arg(i).arg(errLines.at(i).left(300)));
+            }
+        } else {
+            debugLog("  ffmpeg stderr: (empty)");
+        }
+        if (!ffmpegOut.isEmpty()) debugLog("  ffmpeg stdout: " + ffmpegOut.right(500));
     }
     proc->deleteLater();
 
