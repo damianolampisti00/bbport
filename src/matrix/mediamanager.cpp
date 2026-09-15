@@ -1001,8 +1001,14 @@ void MediaManager::finishCarouselEncodeJob(QProcess *proc, bool succeeded)
         item["url"] = "file://" + job.outPath;
         QFile::remove(job.inPath); // raw muxed file is no longer needed
     } else {
-        debugLog("yt-dlp (carousel) re-encode failed, dropping slide: " + job.inPath);
-        item["_encodeFailed"] = true;
+        // Same fallback as finishFfmpegJob() for regular video messages:
+        // NativeVideoPlayer's mm-renderer wrapper plays arbitrary H.264/etc.
+        // content directly, so the untranscoded original is still usable --
+        // confirmed necessary on a real device where this ffmpeg build has
+        // no libx264 encoder at all ("Unknown encoder 'libx264'"), meaning
+        // the encode step can never succeed here regardless of args.
+        debugLog("yt-dlp (carousel) re-encode failed, using original file: " + job.inPath);
+        item["url"] = "file://" + job.inPath;
         QFile::remove(job.outPath);
     }
     pending.items.replace(job.itemIndex, item);
@@ -1018,23 +1024,13 @@ void MediaManager::finalizeCarouselIfDone(const QString &baseUrl)
     if (pending.pendingEncodes > 0) return;
     m_carouselPending.remove(baseUrl);
 
-    // A video slide whose re-encode failed outright is known-unplayable on
-    // this hardware (see the comment above where encodes are kicked off) --
-    // better to show one fewer slide than a permanently black one.
-    QVariantList finalItems;
-    for (int i = 0; i < pending.items.size(); ++i) {
-        QVariantMap item = pending.items.at(i).toMap();
-        if (item.value("_encodeFailed").toBool()) continue;
-        finalItems.append(item);
-    }
-
-    if (finalItems.isEmpty()) {
+    if (pending.items.isEmpty()) {
         emit instagramCarouselFailed(pending.instagramUrl);
         return;
     }
 
-    saveCarouselManifest(baseUrl, finalItems);
-    emit instagramCarouselReady(pending.instagramUrl, finalItems);
+    saveCarouselManifest(baseUrl, pending.items);
+    emit instagramCarouselReady(pending.instagramUrl, pending.items);
 }
 
 void MediaManager::openVideoExternally(const QString &localFileUrl)
