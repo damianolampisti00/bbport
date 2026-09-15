@@ -17,6 +17,15 @@ Container {
         }
 
         ImageView {
+            // A separate copy of the repo-root icon.png, not the same file
+            // bar-descriptor.xml's <asset path="icon.png"> packages for the
+            // launcher icon -- that one lands at native/icon.png, outside
+            // the assets/ folder entirely, so "asset:///" (scoped to
+            // native/assets/, same as every other asset:/// reference in
+            // this app, e.g. bbport_logo.png) could never find it there.
+            // Confirmed broken on a real device: AssetPathResolver logged
+            // "Did not find any asset ... filePath=icon.png" and the cover
+            // rendered with no icon at all.
             imageSource: "asset:///icon.png"
             horizontalAlignment: HorizontalAlignment.Center
             preferredWidth: 64
