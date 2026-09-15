@@ -1517,9 +1517,36 @@ NavigationPane {
             layout: DockLayout {}
             background: Color.create("#101316")
 
+            // ---------------- Auto-login (persistent session) ----------------
+            // ApplicationUI calls matrixApi.tryAutoLogin() at startup whenever
+            // hasSavedSession is true (a previous login's session.json is
+            // still there); this covers the whoami round-trip that validates
+            // it, so the login form below doesn't flash empty for a moment
+            // first. hasSavedSession is a CONSTANT property (set once from
+            // whether the file existed at launch) so this never reappears
+            // once busy goes false, whichever way the attempt resolves.
+            Container {
+                visible: matrixApi.hasSavedSession && matrixApi.busy && !matrixApi.loggedIn
+                layout: StackLayout {}
+                horizontalAlignment: HorizontalAlignment.Fill
+                verticalAlignment: VerticalAlignment.Center
+
+                ActivityIndicator {
+                    preferredWidth: ui.du(10); preferredHeight: ui.du(10)
+                    horizontalAlignment: HorizontalAlignment.Center
+                    running: parent.visible
+                }
+                Label {
+                    text: "Signing in..."
+                    horizontalAlignment: HorizontalAlignment.Center
+                    topMargin: ui.du(2)
+                    textStyle.color: Color.create("#8492a2")
+                }
+            }
+
             // ---------------- Login ----------------
             Container {
-                visible: !matrixApi.loggedIn
+                visible: !matrixApi.loggedIn && !(matrixApi.hasSavedSession && matrixApi.busy)
                 layout: StackLayout {}
                 horizontalAlignment: HorizontalAlignment.Fill
                 verticalAlignment: VerticalAlignment.Center

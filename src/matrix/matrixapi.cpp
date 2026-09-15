@@ -6,6 +6,8 @@
 #include <QNetworkRequest>
 #include <QUrl>
 #include <QDateTime>
+#include <QDir>
+#include <QFile>
 
 #ifdef BBPORT_HAVE_NATIVE_TLS
 #include "tlsnetworkaccessmanager.hpp"
@@ -15,6 +17,16 @@ using namespace bb::data;
 
 static const char *kClientApiBase = "/_matrix/client/r0";
 static const char *kUserAgent = "BBport/1.0 (BlackBerry 10)";
+
+// Private to this app (QDir::homePath(), same directory SyncEngine already
+// uses for sync_since_token.txt/room_cache.json) -- both the foreground UI
+// binary and the headless background binary share this same sandbox (same
+// app id, just two invoke-target entry points in one .bar), so whichever one
+// runs first writes it and either can read it back.
+static QString sessionFilePath()
+{
+    return QDir::homePath() + "/session.json";
+}
 
 MatrixApi::MatrixApi(QObject *parent) :
         QObject(parent),
@@ -31,7 +43,8 @@ MatrixApi::MatrixApi(QObject *parent) :
         m_nam(new QNetworkAccessManager(this)),
 #endif
         m_txnCounter(0),
-        m_busy(false)
+        m_busy(false),
+        m_hasSavedSession(QFile::exists(sessionFilePath()))
 {
 }
 
@@ -47,6 +60,11 @@ bool MatrixApi::isLoggedIn() const
 bool MatrixApi::isBusy() const
 {
     return m_busy;
+}
+
+bool MatrixApi::hasSavedSession() const
+{
+    return m_hasSavedSession;
 }
 
 QString MatrixApi::homeserver() const
@@ -243,6 +261,7 @@ void MatrixApi::onLoginReplyFinished()
     m_accessToken = map.value("access_token").toString();
     m_userId = map.value("user_id").toString();
     m_deviceId = map.value("device_id").toString();
+    saveSession();
     emit loggedInChanged();
     emit loginSucceeded();
 }
@@ -301,8 +320,62 @@ void MatrixApi::onWhoAmIReplyFinished()
     if (map.contains("device_id")) {
         m_deviceId = map.value("device_id").toString();
     }
+    saveSession();
     emit loggedInChanged();
     emit loginSucceeded();
+}
+
+void MatrixApi::tryAutoLogin()
+{
+    if (!m_hasSavedSession) return;
+
+    QFile file(sessionFilePath());
+    if (!file.open(QIODevice::ReadOnly)) return;
+    QByteArray buffer = file.readAll();
+    file.close();
+
+    JsonDataAccess jda;
+    QVariant parsed = jda.loadFromBuffer(buffer);
+    if (jda.hasError()) return;
+
+    QVariantMap session = parsed.toMap();
+    QString homeserver = session.value("homeserver").toString();
+    QString userId = session.value("userId").toString();
+    QString accessToken = session.value("accessToken").toString();
+    if (homeserver.isEmpty() || userId.isEmpty() || accessToken.isEmpty()) return;
+
+    // loginWithToken() itself doesn't touch m_deviceId -- onWhoAmIReplyFinished()
+    // only overwrites it when the server's response actually includes one
+    // (device_id is optional per spec there). Pre-filling it from the saved
+    // session here means saveSession() re-persists the already-known value
+    // instead of silently blanking it out on a restore where the server
+    // happens to omit it. (OlmCryptoManager's own device identity is
+    // unrelated -- it persists its deviceId itself in bbport_olm/account.dat,
+    // independent of anything MatrixApi does.)
+    m_deviceId = session.value("deviceId").toString();
+    loginWithToken(homeserver, userId, accessToken);
+}
+
+void MatrixApi::saveSession() const
+{
+    QVariantMap session;
+    session["homeserver"] = m_homeserver;
+    session["userId"] = m_userId;
+    session["accessToken"] = m_accessToken;
+    session["deviceId"] = m_deviceId;
+
+    JsonDataAccess jda;
+    QByteArray buffer;
+    jda.saveToBuffer(QVariant(session), &buffer);
+    QFile file(sessionFilePath());
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        file.write(buffer);
+    }
+}
+
+void MatrixApi::clearSession() const
+{
+    QFile::remove(sessionFilePath());
 }
 
 void MatrixApi::logout()
@@ -314,5 +387,6 @@ void MatrixApi::logout()
     m_userId.clear();
     m_deviceId.clear();
     m_homeserver.clear();
+    clearSession();
     emit loggedInChanged();
 }

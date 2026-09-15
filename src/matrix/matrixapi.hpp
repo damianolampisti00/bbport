@@ -20,6 +20,12 @@ class MatrixApi : public QObject
     Q_PROPERTY(QString userId READ userId NOTIFY loggedInChanged)
     Q_PROPERTY(bool busy READ isBusy NOTIFY busyChanged)
     Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
+    // True if a session.json existed at startup, i.e. tryAutoLogin() has
+    // something to attempt -- lets main.qml show a "Signing in..." state
+    // instead of flashing the login form while that attempt is in flight
+    // (busy is also true during a fresh manual login, which needs the
+    // ordinary form still visible underneath it).
+    Q_PROPERTY(bool hasSavedSession READ hasSavedSession CONSTANT)
 
 public:
     explicit MatrixApi(QObject *parent = 0);
@@ -27,6 +33,7 @@ public:
 
     bool isLoggedIn() const;
     bool isBusy() const;
+    bool hasSavedSession() const;
     QString homeserver() const;
     QString userId() const;
     QString deviceId() const;
@@ -63,6 +70,16 @@ public slots:
     void loginWithToken(const QString &homeserver, const QString &userId, const QString &accessToken);
     void logout();
 
+    // Reads session.json (written by saveSession() after any successful
+    // login) and, if present, calls loginWithToken() with its contents --
+    // this re-validates via /account/whoami exactly like a manually-entered
+    // "Existing access token" login, so a revoked/expired token falls back
+    // to loginFailed() and the ordinary login form with no separate error
+    // path needed. A no-op (no signal emitted either way) if there's no
+    // saved session to try. Safe to call from both ApplicationUI (foreground)
+    // and ApplicationHeadless -- same session.json, same app sandbox.
+    void tryAutoLogin();
+
 signals:
     void loginSucceeded();
     void loginFailed(const QString &error);
@@ -80,6 +97,12 @@ private:
     QNetworkRequest authorizedRequest(const QUrl &url, const QString &contentType = QString()) const;
     void setBusy(bool busy);
     void setLastError(const QString &error);
+    // Writes {homeserver, userId, accessToken, deviceId} to session.json
+    // (see matrixapi.cpp's sessionFilePath()) -- called after every
+    // successful login/whoami, fresh or restored alike, since restoring an
+    // already-saved session just rewrites the same data.
+    void saveSession() const;
+    void clearSession() const;
 
     QNetworkAccessManager *m_nam;
     QString m_homeserver;
@@ -90,6 +113,7 @@ private:
     QString m_lastError;
     qint64 m_txnCounter;
     bool m_busy;
+    bool m_hasSavedSession;
 };
 
 #endif /* MATRIXAPI_HPP_ */

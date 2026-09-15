@@ -151,6 +151,14 @@ ApplicationUI::ApplicationUI() :
     // connection covers both cases.
     m_invokeManager = new bb::system::InvokeManager(this);
     connect(m_invokeManager, SIGNAL(invoked(bb::system::InvokeRequest)), this, SLOT(onInvoked(bb::system::InvokeRequest)));
+
+    // If a previous login left session.json behind (see MatrixApi::saveSession()),
+    // try it before the user ever sees the login form -- main.qml gates its
+    // "Signing in..." state on matrixApi.hasSavedSession so it doesn't just
+    // flash the empty login form for the brief whoami round-trip this
+    // triggers. A missing/revoked/expired token falls back to loginFailed()
+    // and the ordinary form with no extra handling needed here.
+    m_matrixApi->tryAutoLogin();
 }
 
 void ApplicationUI::onInvoked(const bb::system::InvokeRequest &request)
