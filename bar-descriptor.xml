@@ -27,9 +27,21 @@
     <!-- A universally unique application identifier. Must be unique across all BlackBerry 10 applications.
          Using a reverse DNS-style name as the id is recommended. (Eg. com.example.ExampleApplication.) Required. -->
     <id>it.bbport.client</id>
+    <!-- entryPointId on the main UI asset + the headless one below, plus the
+         matching <entryPoint> declarations further down, are only needed now
+         that there are TWO binaries in this one .bar (see BBportHeadless/,
+         step 4 of the persistent-login/headless-push plan): the invoke
+         framework needs a name for each to route bb.action.system.STARTED to
+         the right one. Only wired for Device-Debug so far, deliberately the
+         smallest possible slice (a stub that only logs a boot-time line, see
+         BBportHeadless/src/applicationheadless.cpp) to confirm
+         _sys_run_headless/_sys_headless_nostop actually work on a real
+         device before the real sync service is built on top of it;
+         Device-Release gets the same treatment once that's confirmed. -->
     <configuration name="Device-Debug">
        <platformArchitecture>armle-v7</platformArchitecture>
-       <asset path="arm/o.le-v7-g/BBport" entry="true" type="Qnx/Elf">BBport</asset>
+       <asset entryPointId="BBportUi" path="arm/o.le-v7-g/BBport" entry="true" type="Qnx/Elf">BBport</asset>
+       <asset entryPointId="BBportHeadless" path="BBportHeadless/arm/BBportHeadless" type="Qnx/Elf">BBportHeadless</asset>
     </configuration>
     <configuration name="Device-Release">
        <entryPointType>Qnx/Cascades</entryPointType>
@@ -44,6 +56,14 @@
        <platformArchitecture>x86</platformArchitecture>
        <asset path="x86/o-g/BBport" entry="true" type="Qnx/Elf">BBport</asset>
     </configuration>
+
+    <entryPoint id="BBportUi">
+        <name>BBportUi</name>
+    </entryPoint>
+    <entryPoint id="BBportHeadless">
+        <name>BBportHeadless</name>
+        <entryPointType>Qnx/Elf</entryPointType>
+    </entryPoint>
 
     <!-- The name that is displayed in the BlackBerry 10 application installer.
          May have multiple values for each language. See samples or xsd schema file. Optional. -->
@@ -107,14 +127,42 @@
          kAppInvokeTarget in notificationmanager.cpp exactly. -->
     <invoke-target id="it.bbport.client.notification" system="false">
         <type>APPLICATION</type>
+        <!-- Explicit now that there are two entry points declared (see
+             BBportHeadless above); this one must resolve to the UI binary,
+             never the headless one. -->
+        <entry-point-id>BBportUi</entry-point-id>
         <filter>
             <action>bb.action.OPEN</action>
             <mime-type>application/x-bbport-room</mime-type>
         </filter>
     </invoke-target>
 
+    <!-- Launches BBportHeadless (see entryPoint above) once at every device
+         boot. The real structure, verified this session against
+         BlackBerry's own official headlesserviceui/headlesservice sample
+         (github.com/blackberry/Cascades-Samples), fetched directly since
+         BlackBerry's own docs site for this is now dead. Currently just the
+         step-4 smoke-test stub; grows into the real background sync service
+         once this confirms the mechanism itself works on this device. -->
+    <invoke-target id="it.bbport.client.headless" system="false">
+        <invoke-target-type>application.headless</invoke-target-type>
+        <invoke-target-name>BBport Background Sync</invoke-target-name>
+        <entry-point-id>BBportHeadless</entry-point-id>
+        <filter>
+            <action>bb.action.system.STARTED</action>
+            <mime-type>application/vnd.blackberry.system.event.STARTED</mime-type>
+            <property var="uris" value="data://local"/>
+        </filter>
+    </invoke-target>
+
     <!-- Request permission to execute native code.  Required for native applications. -->
     <permission system="true">run_native</permission>
+    <!-- Both needed for BBportHeadless (the invoke-target above) to actually
+         launch and keep running as a background service, per
+         github.com/blackberry/Cascades-Samples' headlesserviceui sample,
+         which declares the identical pair for the identical purpose. -->
+    <permission system="true">_sys_run_headless</permission>
+    <permission system="true">_sys_headless_nostop</permission>
     <!-- Needed to talk to the Matrix homeserver over HTTPS. -->
     <permission>access_internet</permission>
     <!-- Needed to attach photos from the camera and the shared camera roll. -->

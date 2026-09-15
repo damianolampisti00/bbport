@@ -2,6 +2,15 @@
 /arm/
 /arm-p/
 /x86/
+# Same, for the BBportHeadless sibling project (see BBportHeadless.pro) --
+# its own build tree, not root-anchored since it's one level down.
+BBportHeadless/arm/
+BBportHeadless/arm-p/
+BBportHeadless/x86/
+# No translatable strings in a headless service with no UI -- nothing to
+# check in here (unlike BBport.ts/.qm, which are committed).
+BBportHeadless/translations/*.ts
+BBportHeadless/translations/*.qm
 *.o
 *.bar
 
