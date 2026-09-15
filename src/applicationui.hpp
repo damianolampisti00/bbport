@@ -62,6 +62,11 @@ private slots:
     // -- extracts the roomId payload and hands it to RoomListModel so the
     // QML side (watching pendingOpenRoomId) can push that conversation open.
     void onInvoked(const bb::system::InvokeRequest &request);
+    // Logs the outcome of registerTimer() (see the constructor) -- the only
+    // way to see on a real device whether the recurring headless-wakeup
+    // timer actually registered, since registerTimer() is asynchronous and
+    // this project has no console attached to a standalone install.
+    void onHeadlessTimerRegistered();
 private:
     QTranslator* m_pTranslator;
     bb::cascades::LocaleHandler* m_pLocaleHandler;

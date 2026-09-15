@@ -39,6 +39,11 @@
 #include <bb/cascades/Container>
 #include <bb/system/InvokeManager>
 #include <bb/system/InvokeRequest>
+#include <bb/system/InvokeTimerRequest>
+#include <bb/system/InvokeRecurrenceRule>
+#include <bb/system/InvokeReply>
+
+#include "matrix/bbportlog.hpp"
 
 using namespace bb::cascades;
 
@@ -159,6 +164,34 @@ ApplicationUI::ApplicationUI() :
     // triggers. A missing/revoked/expired token falls back to loginFailed()
     // and the ordinary form with no extra handling needed here.
     m_matrixApi->tryAutoLogin();
+
+    // Registers (or re-registers -- same fixed timerId every launch, on the
+    // assumption that's an idempotent replace rather than a duplicate/error;
+    // unconfirmed, next real-device test settles it) a recurring wakeup for
+    // BBportHeadless (see bar-descriptor.xml's it.bbport.client.headless
+    // invoke-target and the persistent-login/headless-push plan) so a
+    // background sync can happen even with this UI process fully closed.
+    // Unconditional regardless of login state -- harmless if there's no
+    // session yet, since the headless side has nothing to sync in that case
+    // either. 15 minutes, comfortably above InvokeRecurrenceRule's documented
+    // 6-minute floor (a schedule denser than that is rejected outright).
+    bb::system::InvokeRecurrenceRule headlessRule(bb::system::InvokeRecurrenceRuleFrequency::Minutely);
+    headlessRule.setInterval(15);
+    bb::system::InvokeTimerRequest headlessTimer("it.bbport.client.headlessSyncTimer", headlessRule, "it.bbport.client.headless");
+    bb::system::InvokeReply *timerReply = m_invokeManager->registerTimer(headlessTimer);
+    if (timerReply) {
+        connect(timerReply, SIGNAL(finished()), this, SLOT(onHeadlessTimerRegistered()));
+    } else {
+        bbportLog("[BBport] registerTimer() returned null -- request could not even be sent");
+    }
+}
+
+void ApplicationUI::onHeadlessTimerRegistered()
+{
+    bb::system::InvokeReply *reply = qobject_cast<bb::system::InvokeReply*>(sender());
+    if (!reply) return;
+    bbportLog(QString("[BBport] headless timer registration finished, error=%1").arg(int(reply->error())));
+    reply->deleteLater();
 }
 
 void ApplicationUI::onInvoked(const bb::system::InvokeRequest &request)

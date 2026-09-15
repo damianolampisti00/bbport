@@ -1,5 +1,5 @@
 1
-4026
+4027
 bbport_logo.png
 cacert.pem
 cover.qml
@@ -4015,6 +4015,7 @@ emoji/e50a.png
 emoji/LICENSE.txt
 EmojiIcon.qml
 emojimap.js
+icon.png
 icons/mic-active.svg
 icons/mic-active.xpm
 icons/mic-icon.png
