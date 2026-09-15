@@ -424,6 +424,13 @@ NavigationPane {
                 // in this file.
                 property string currentSlideType: "image"
                 property string currentSlideUrl: ""
+                // 0 when the current slide's own item carries no width/
+                // height (an older cached manifest from before parth-dl
+                // started reporting them, or a MISSING_INDEX entry) --
+                // fwcCarouselVideoSurface below falls back to a fixed
+                // square whenever either is 0, same as before this existed.
+                property int currentSlideWidth: 0
+                property int currentSlideHeight: 0
                 property int slideCount: 0
                 property string activeVideoUrl: ""
                 property bool videoPlaying: false
@@ -448,6 +455,8 @@ NavigationPane {
                     var item = carouselDataModel.value(currentIndex);
                     currentSlideType = item ? item.type : "image";
                     currentSlideUrl = item ? item.url : "";
+                    currentSlideWidth = (item && item.width) ? item.width : 0;
+                    currentSlideHeight = (item && item.height) ? item.height : 0;
                     if (currentSlideType === "video") activeVideoUrl = currentSlideUrl;
                 }
                 onActiveVideoUrlChanged: {
@@ -456,7 +465,7 @@ NavigationPane {
                     // approach as videoViewerPage (see its own comment for
                     // why: bb::multimedia::MediaPlayer rendered solid black
                     // on-device despite binding correctly).
-                    videoPlaying = carouselVideoPlayer.play(activeVideoUrl, "bbportCarouselVideoSurface", fwcCarouselVideoSurface.windowGroup, fwcCarouselVideoSurface.maxBox, fwcCarouselVideoSurface.maxBox);
+                    videoPlaying = carouselVideoPlayer.play(activeVideoUrl, "bbportCarouselVideoSurface", fwcCarouselVideoSurface.windowGroup, fwcCarouselVideoSurface.pixelWidth, fwcCarouselVideoSurface.pixelHeight);
                 }
                 // Called from navigationPane's onPopTransitionEnded (see its
                 // own comment) -- without this mm-renderer keeps playing
@@ -579,12 +588,13 @@ NavigationPane {
                         verticalAlignment: VerticalAlignment.Center
                     }
 
-                    // Full-bleed rather than videoViewerPage's letterboxed
-                    // maxBox: that page knows the real content.info width/
-                    // height from the message event, this one doesn't (yt-dlp
-                    // only reports back {type, url} per slide -- see
-                    // MediaManager::fetchInstagramCarousel()), and a
-                    // full-screen gallery reads better full-bleed anyway.
+                    // Letterboxed within a maxBox square, same as
+                    // videoViewerPage's own fwcVideoSurface -- parth-dl
+                    // reports each item's real width/height (see
+                    // MediaManager::finishInstagramFetch()'s ".dims"
+                    // sidecar handling), so this now sizes against real
+                    // content dimensions the same way, falling back to a
+                    // plain maxBox square only when they're unknown (0).
                     ForeignWindowControl {
                         id: fwcCarouselVideoSurface
                         visible: activeVideoUrl.length > 0 && boundToWindow
@@ -594,19 +604,25 @@ NavigationPane {
                         // black if the surface it binds to hasn't already
                         // resolved to real pixel dimensions at bind time,
                         // which Fill-based layout sizing doesn't guarantee
-                        // has happened yet. videoViewerPage sidesteps this
-                        // with a fixed maxBox square (matching its own
-                        // "unknown dimensions" fallback, since carousel
-                        // items carry no width/height metadata to size
-                        // against either) -- same fix here, verbatim.
+                        // has happened yet.
                         // preferredWidth/Height wrapped in ui.px() (raw
                         // pixels, not DU -- see videoViewerPage's own
-                        // fwcVideoSurface comment) so maxBox stays readable
-                        // as-is for NativeVideoPlayer.play()'s destWidth/
-                        // destHeight, which mm-renderer needs in real pixels.
+                        // fwcVideoSurface comment) so pixelWidth/pixelHeight
+                        // stay readable as-is for NativeVideoPlayer.play()'s
+                        // destWidth/destHeight, which mm-renderer needs in
+                        // real pixels. Ternary expression (not an if/return
+                        // block, and not a separate rebinding statement) is
+                        // deliberate -- see videoViewerPage's own
+                        // pixelWidth/pixelHeight comment for the two ways
+                        // this exact pattern broke QML loading entirely
+                        // before landing on this form.
                         property int maxBox: 720
-                        preferredWidth: ui.px(maxBox)
-                        preferredHeight: ui.px(maxBox)
+                        property int pixelWidth: (currentSlideWidth <= 0 || currentSlideHeight <= 0) ? maxBox
+                                : Math.round(currentSlideWidth * Math.min(maxBox / currentSlideWidth, maxBox / currentSlideHeight))
+                        property int pixelHeight: (currentSlideWidth <= 0 || currentSlideHeight <= 0) ? maxBox
+                                : Math.round(currentSlideHeight * Math.min(maxBox / currentSlideWidth, maxBox / currentSlideHeight))
+                        preferredWidth: ui.px(pixelWidth)
+                        preferredHeight: ui.px(pixelHeight)
                         horizontalAlignment: HorizontalAlignment.Center
                         verticalAlignment: VerticalAlignment.Center
                         windowId: "bbportCarouselVideoSurface"
@@ -689,7 +705,7 @@ NavigationPane {
                             rightMargin: ui.du(1)
                         }
                         Label {
-                            text: "Caricamento carosello..."
+                            text: "Loading carousel..."
                             textStyle.color: Color.White
                             verticalAlignment: VerticalAlignment.Center
                         }
@@ -697,7 +713,7 @@ NavigationPane {
 
                     Label {
                         visible: loadError
-                        text: "Impossibile caricare le altre foto/video di questo post."
+                        text: "Couldn't load the other photos/videos in this post."
                         horizontalAlignment: HorizontalAlignment.Center
                         verticalAlignment: VerticalAlignment.Bottom
                         bottomMargin: ui.du(3)
@@ -1637,7 +1653,7 @@ NavigationPane {
                         }
                     }
                     Label {
-                        text: "CONVERSAZIONI"
+                        text: "CONVERSATIONS"
                         topMargin: ui.du(1)
                         textStyle.base: SystemDefaults.TextStyles.SmallText
                         textStyle.color: Color.create("#9ab8da")

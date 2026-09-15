@@ -281,7 +281,7 @@ void MatrixApi::onWhoAmIReplyFinished()
         if (map.contains("error")) {
             err = QString("%1 (%2)").arg(map.value("error").toString(), map.value("errcode").toString());
         } else if (netError != QNetworkReply::NoError) {
-            err = QString("Errore di rete: %1").arg(netErrorString);
+            err = QString("Network error: %1").arg(netErrorString);
         } else {
             err = "Invalid token or unexpected response from server.";
         }

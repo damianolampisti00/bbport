@@ -21,6 +21,7 @@ extern "C" {
 #include <QFileInfo>
 #include <QDir>
 #include <QCryptographicHash>
+#include <QRegExp>
 #include <QUrl>
 #include <QDateTime>
 #include <QTextStream>
@@ -76,9 +77,15 @@ static const char *kBerryCorePython3 = "/accounts/1000/shared/misc/berrycore/bin
 // get a JPEG transcode for, say).
 //
 // Invoked as `python3 -c <this> <postUrl> <outPrefix>`; writes each entry
-// to "<outPrefix>_<NN>.<ext>" (1-based, matching carousel slide order) and
-// prints one "OK N kind ext url" / "FAIL N reason" / "MISSING_INDEX N"
-// line per entry for debugLog to capture.
+// to "<outPrefix>_<NN>.<ext>" (1-based, matching carousel slide order),
+// plus a plain-text "<outPrefix>_<NN>.dims" sidecar ("<width> <height>",
+// parth-dl already reports both for every format) that
+// finishInstagramFetch() folds into that item's width/height and then
+// deletes -- QML uses real dimensions to size the video surface without
+// stretching (see carouselViewerPage's fwcCarouselVideoSurface), instead
+// of the fixed square used when an item's real size isn't known. Prints
+// one "OK N kind ext WxH url" / "FAIL N reason" / "MISSING_INDEX N" line
+// per entry for debugLog to capture.
 static const char *kInstagramFetchScript =
     "import sys, ssl, urllib.request\n"
     "\n"
@@ -132,7 +139,10 @@ static const char *kInstagramFetchScript =
     "            ext = 'jpg'\n"
     "        with open('%s_%02d.%s' % (out_prefix, idx, ext), 'wb') as f:\n"
     "            f.write(data)\n"
-    "        print('OK %d %s %s %s' % (idx, kind, ext, item_url[:120]))\n"
+    "        w, h = formats[0].get('width') or 0, formats[0].get('height') or 0\n"
+    "        with open('%s_%02d.dims' % (out_prefix, idx), 'w') as f:\n"
+    "            f.write('%d %d' % (w, h))\n"
+    "        print('OK %d %s %s %dx%d %s' % (idx, kind, ext, w, h, item_url[:120]))\n"
     "    except Exception as e:\n"
     "        print('FAIL %d %s' % (idx, e))\n";
 
@@ -606,15 +616,37 @@ void MediaManager::finishInstagramFetch(QProcess *proc, bool succeeded)
             .entryList(QStringList() << (prefixInfo.fileName() + "_*"), QDir::Files, QDir::Name);
     debugLog(QString("  parth-dl output matches: %1").arg(matches.join(", ")));
 
+    // Filename -> 1-based slide index, to pair each media file back up with
+    // its own "<prefix>_NN.dims" sidecar (see kInstagramFetchScript's doc
+    // comment) for real width/height, letting QML size the video surface
+    // correctly instead of always falling back to a fixed square.
+    QRegExp indexRe(QRegExp::escape(prefixInfo.fileName()) + "_(\\d+)\\..*");
+
     QVariantList items;
     if (succeeded) {
         foreach (const QString &name, matches) {
+            if (name.endsWith(".dims")) continue; // read by index below, not a media file itself
             QString mime = mimeTypeForFile(name);
             if (!mime.startsWith("image/") && !mime.startsWith("video/")) continue; // skip unknown leftovers
             QVariantMap item;
             item["type"] = mime.startsWith("video/") ? "video" : "image";
             item["url"] = "file://" + prefixInfo.absolutePath() + "/" + name;
+            if (indexRe.exactMatch(name)) {
+                QFile dimsFile(job.outPrefix + "_" + indexRe.cap(1) + ".dims");
+                if (dimsFile.open(QIODevice::ReadOnly)) {
+                    QStringList wh = QString::fromUtf8(dimsFile.readAll()).trimmed().split(' ');
+                    if (wh.size() == 2 && wh.at(0).toInt() > 0 && wh.at(1).toInt() > 0) {
+                        item["width"] = wh.at(0).toInt();
+                        item["height"] = wh.at(1).toInt();
+                    }
+                }
+            }
             items.append(item);
+        }
+        // .dims sidecars are consumed above; they never belong in the
+        // cached manifest or get treated as a media item themselves.
+        foreach (const QString &name, matches) {
+            if (name.endsWith(".dims")) QFile::remove(prefixInfo.absolutePath() + "/" + name);
         }
     }
 
@@ -736,9 +768,9 @@ void MediaManager::debugLog(const QString &line)
 {
     // bbportLog() writes to the same shared/misc file this used to write
     // directly (still readable via Term49/BerryCore with no PC round-trip)
-    // AND to qDebug(), so these lines -- yt-dlp's carousel command/exit
-    // code/stdout/stderr in particular -- also show up live in Momentics'
-    // console instead of only being visible via the file.
+    // AND to qDebug(), so these lines -- parth-dl's Instagram fetch command/
+    // exit code/stdout/stderr in particular -- also show up live in
+    // Momentics' console instead of only being visible via the file.
     bbportLog(line);
 }
 
