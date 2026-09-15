@@ -983,6 +983,35 @@ void MediaManager::finishCarouselEncodeJob(QProcess *proc, bool succeeded)
             debugLog("  ffmpeg stderr: (empty)");
         }
         if (!ffmpegOut.isEmpty()) debugLog("  ffmpeg stdout: " + ffmpegOut.right(500));
+
+        // One-time diagnostic: libx264 turned out to be missing from this
+        // BerryCore ffmpeg build entirely (see the "Unknown encoder" line
+        // above) -- rather than guess at another codec name blind, list
+        // what this exact binary actually has compiled in, once, so the
+        // next real-device test settles it instead of another round trip.
+        static bool probedEncoders = false;
+        if (!probedEncoders) {
+            probedEncoders = true;
+            QProcess probe;
+            probe.setProcessEnvironment(berryCoreEnvironment());
+            probe.start(QString::fromLatin1(kBerryCoreFfmpeg), QStringList() << "-hide_banner" << "-encoders");
+            if (probe.waitForFinished(5000)) {
+                QString out = QString::fromUtf8(probe.readAllStandardOutput());
+                QStringList lines = out.split('\n', QString::SkipEmptyParts);
+                debugLog(QString("ffmpeg -encoders: %1 line(s) total, filtering for video codecs").arg(lines.size()));
+                foreach (const QString &line, lines) {
+                    QString lower = line.toLower();
+                    if (lower.contains("264") || lower.contains("265") || lower.contains("hevc")
+                        || lower.contains("vp8") || lower.contains("vp9") || lower.contains("av1")
+                        || lower.contains("mpeg4") || lower.contains("theora")) {
+                        debugLog("  encoder: " + line.trimmed().left(150));
+                    }
+                }
+            } else {
+                debugLog("  ffmpeg -encoders probe timed out");
+                probe.kill();
+            }
+        }
     }
     proc->deleteLater();
 
