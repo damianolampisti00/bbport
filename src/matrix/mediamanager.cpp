@@ -41,6 +41,60 @@ static const char *kBerryCoreRoot = "/accounts/1000/shared/misc/berrycore";
 static const char *kBerryCoreFfmpeg = "/accounts/1000/shared/misc/berrycore/bin/ffmpeg";
 static const char *kBerryCorePython3 = "/accounts/1000/shared/misc/berrycore/bin/python3";
 
+// yt-dlp can't download a mixed Instagram carousel's photo entries at all
+// (see the doc comment above the "?img_index=N" / shortcode dead end in
+// finishCarouselJob()) -- this scrapes the same post page yt-dlp itself
+// already fetches for each missing slide's "display_url" (the sidecar
+// child's direct CDN image URL, embedded as inline JSON in the page HTML)
+// and downloads it directly, bypassing yt-dlp's broken photo-format
+// resolution entirely. Invoked as `python3 -c <this> <postUrl> <outPrefix>
+// <comma-separated 1-based missing indices>`; writes each found image to
+// "<outPrefix><NN>.jpg" and prints one "OK N url" / "FAIL N reason" /
+// "MISSING_INDEX N" line per requested index for debugLog to capture.
+static const char *kCarouselPhotoScrapeScript =
+    "import sys, re, json, ssl, urllib.request\n"
+    "\n"
+    "def unescape(s):\n"
+    "    try:\n"
+    "        return json.loads('\"' + s + '\"')\n"
+    "    except Exception:\n"
+    "        return s\n"
+    "\n"
+    "url, out_prefix, missing_str = sys.argv[1], sys.argv[2], sys.argv[3]\n"
+    "missing = [int(x) for x in missing_str.split(',') if x]\n"
+    "\n"
+    "ctx = ssl.create_default_context()\n"
+    "ctx.check_hostname = False\n"
+    "ctx.verify_mode = ssl.CERT_NONE\n"
+    "\n"
+    "ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'\n"
+    "req = urllib.request.Request(url, headers={'User-Agent': ua, 'Accept-Language': 'en-US,en;q=0.9'})\n"
+    "html = urllib.request.urlopen(req, context=ctx, timeout=20).read().decode('utf-8', 'ignore')\n"
+    "\n"
+    "raw_urls = re.findall(r'\"display_url\":\"([^\"]+)\"', html)\n"
+    "seen = set()\n"
+    "ordered = []\n"
+    "for u in raw_urls:\n"
+    "    real = unescape(u)\n"
+    "    if real not in seen:\n"
+    "        seen.add(real)\n"
+    "        ordered.append(real)\n"
+    "\n"
+    "print('found %d display_url candidate(s)' % len(ordered))\n"
+    "\n"
+    "for idx in missing:\n"
+    "    if idx - 1 >= len(ordered):\n"
+    "        print('MISSING_INDEX %d' % idx)\n"
+    "        continue\n"
+    "    img_url = ordered[idx - 1]\n"
+    "    try:\n"
+    "        data = urllib.request.urlopen(urllib.request.Request(img_url, headers={'User-Agent': ua}), context=ctx, timeout=20).read()\n"
+    "        with open('%s%02d.jpg' % (out_prefix, idx), 'wb') as f:\n"
+    "            f.write(data)\n"
+    "        print('OK %d %s' % (idx, img_url))\n"
+    "    except Exception as e:\n"
+    "        print('FAIL %d %s' % (idx, e))\n";
+
 // BerryCore's bundled youtube-dl binary (not this) hits an on-device-
 // confirmed bug: every HTTPS request fails with "tlsv1 alert protocol
 // version" (OpenSSL itself is a modern 3.3.2 -- confirmed via `python3 -c
@@ -650,71 +704,70 @@ void MediaManager::finishCarouselJob(QProcess *proc, bool succeeded)
     // yt-dlp's Instagram extractor tries to resolve "video formats" for
     // every entry of a mixed photo+video carousel and errors out on the
     // photo ones ("No video formats found!") -- a known, maintainer-closed
-    // wontfix limitation (github.com/yt-dlp/yt-dlp issue #7569). Instagram's
-    // own "?img_index=N" per-slide link does NOT work around this --
-    // confirmed on a real device that yt-dlp ignores the query string
-    // entirely and just re-runs the exact same full-carousel extraction
-    // (same "No video formats found!" errors, plus a redundant duplicate
-    // download of the one video slide each time). What actually identifies
-    // a missing slide is its OWN shortcode, which yt-dlp already prints
-    // in the error line itself: "[Instagram] <shortcode>: No video formats
-    // found!". Each carousel child has its own permalink
-    // (instagram.com/p/<shortcode>/), independent of the parent post's, and
-    // fetching that directly goes through the exact same single-post
-    // extraction path already proven correct for a plain, non-carousel
-    // Instagram photo post.
-    QStringList missingShortcodes;
-    QRegExp shortcodeRe("\\[Instagram\\] ([A-Za-z0-9_-]+): No video formats found!");
-    int scanPos = 0;
-    while ((scanPos = shortcodeRe.indexIn(stdErr, scanPos)) != -1) {
-        QString code = shortcodeRe.cap(1);
-        if (!missingShortcodes.contains(code)) missingShortcodes.append(code);
-        scanPos += shortcodeRe.matchedLength();
+    // wontfix limitation (github.com/yt-dlp/yt-dlp issue #7569), confirmed
+    // at the extractor source level: a photo sidecar child is never given
+    // downloadable formats, no matter which URL reaches it. On a real
+    // device, both Instagram's own "?img_index=N" link and each child's
+    // own shortcode-as-permalink re-triggered the exact same full-sidecar
+    // extraction and error set every time -- individual sidecar children
+    // have no independently extractable permalink via yt-dlp at all, so
+    // retrying with a different URL is a dead end.
+    //
+    // What actually works: the same post page yt-dlp already downloads
+    // (its own "Downloading webpage" step) embeds each sidecar child's
+    // direct CDN image URL as a "display_url" field in inline JSON --
+    // yt-dlp parses this same JSON internally but only follows it for the
+    // video-format walk, discarding it for photo entries. A small,
+    // separate Python scrape of that same page's "display_url" fields
+    // gets the missing photos directly, with zero dependency on yt-dlp's
+    // broken format-resolution path.
+    QRegExp countRe("Downloading\\s+\\d+\\s+items?\\s+of\\s+(\\d+)");
+    int totalSlides = (countRe.indexIn(stdOut) >= 0) ? countRe.cap(1).toInt() : -1;
+
+    QRegExp indexRe(QRegExp::escape(prefixInfo.fileName()) + "_(\\d+)\\..*");
+    QList<int> presentIndices;
+    foreach (const QString &name, matches) {
+        if (indexRe.exactMatch(name)) presentIndices.append(indexRe.cap(1).toInt());
     }
 
-    if (missingShortcodes.isEmpty()) {
+    QStringList missingIndices;
+    // Instagram's own UI caps a carousel at 10 slides -- also guards
+    // against a stdout parse going wrong and looping some huge bogus count.
+    for (int i = 1; i <= totalSlides && i <= 10; ++i) {
+        if (!presentIndices.contains(i)) missingIndices.append(QString::number(i));
+    }
+
+    if (missingIndices.isEmpty()) {
         startCarouselVideoEncodes(baseUrl, instagramUrl, items);
         return;
     }
 
-    debugLog(QString("yt-dlp (carousel) %1 slide(s) missing from the playlist run -- retrying individually by shortcode")
-                 .arg(missingShortcodes.size()));
+    debugLog(QString("yt-dlp (carousel) slide(s) %1 missing from the playlist run -- scraping display_url directly")
+                 .arg(missingIndices.join(",")));
 
     CarouselSlideFetchPending slidePending;
     slidePending.instagramUrl = instagramUrl;
     slidePending.items = items;
-    slidePending.pendingFetches = 0;
+    slidePending.pendingFetches = 1;
 
-    for (int i = 0; i < missingShortcodes.size(); ++i) {
-        const QString &code = missingShortcodes.at(i);
-        QString slotPrefix = outPrefix + QString("_sc%1").arg(i, 2, 10, QChar('0'));
-        QString outTemplate = slotPrefix + ".%(ext)s";
-        QString slideUrl = "https://www.instagram.com/p/" + code + "/";
+    QString slotPrefix = outPrefix + "_photo";
 
-        QStringList args;
-        args << "-m" << "yt_dlp"
-             << "--no-warnings" << "--no-check-certificate"
-             << "--ffmpeg-location" << QString::fromLatin1(kBerryCoreFfmpeg)
-             << "-o" << outTemplate
-             << slideUrl;
+    QStringList args;
+    args << "-c" << QString::fromLatin1(kCarouselPhotoScrapeScript)
+         << baseUrl << slotPrefix << missingIndices.join(",");
 
-        debugLog(QString("yt-dlp (carousel) fetching missing slide %1: %2").arg(code).arg(slideUrl));
+    CarouselSlideFetchJob job;
+    job.baseUrl = baseUrl;
+    job.slotPrefix = slotPrefix;
 
-        CarouselSlideFetchJob job;
-        job.baseUrl = baseUrl;
-        job.slotPrefix = slotPrefix;
-
-        QProcess *slideProc = new QProcess(this);
-        slideProc->setProcessEnvironment(berryCoreEnvironment());
-        m_carouselSlideJobs[slideProc] = job;
-        connect(slideProc, SIGNAL(finished(int,QProcess::ExitStatus)), this, SLOT(onCarouselSlideFetchFinished(int,QProcess::ExitStatus)));
-        connect(slideProc, SIGNAL(error(QProcess::ProcessError)), this, SLOT(onCarouselSlideFetchError(QProcess::ProcessError)));
-        slideProc->start(QString::fromLatin1(kBerryCorePython3), args);
-        ++slidePending.pendingFetches;
-    }
+    QProcess *slideProc = new QProcess(this);
+    slideProc->setProcessEnvironment(berryCoreEnvironment());
+    m_carouselSlideJobs[slideProc] = job;
+    connect(slideProc, SIGNAL(finished(int,QProcess::ExitStatus)), this, SLOT(onCarouselSlideFetchFinished(int,QProcess::ExitStatus)));
+    connect(slideProc, SIGNAL(error(QProcess::ProcessError)), this, SLOT(onCarouselSlideFetchError(QProcess::ProcessError)));
+    slideProc->start(QString::fromLatin1(kBerryCorePython3), args);
 
     m_carouselSlideFetchPending[baseUrl] = slidePending;
-    finalizeCarouselSlideFetchesIfDone(baseUrl);
 }
 
 void MediaManager::onCarouselSlideFetchFinished(int exitCode, QProcess::ExitStatus exitStatus)
@@ -736,16 +789,18 @@ void MediaManager::finishCarouselSlideFetch(QProcess *proc, bool succeeded)
 {
     CarouselSlideFetchJob job = m_carouselSlideJobs.take(proc);
 
-    debugLog(QString("yt-dlp (carousel) missing-slide fetch finished succeeded=%1 exitCode=%2")
+    debugLog(QString("carousel photo scrape finished succeeded=%1 exitCode=%2")
                  .arg(succeeded).arg(proc->exitCode()));
+    QString stdOut = QString::fromUtf8(proc->readAllStandardOutput());
     QString stdErr = QString::fromUtf8(proc->readAllStandardError());
-    if (!stdErr.isEmpty()) debugLog("  yt-dlp stderr: " + stdErr.left(1000));
+    if (!stdOut.isEmpty()) debugLog("  scrape stdout: " + stdOut.left(2000));
+    if (!stdErr.isEmpty()) debugLog("  scrape stderr: " + stdErr.left(1000));
 
     proc->deleteLater();
 
     QFileInfo slotInfo(job.slotPrefix);
     QStringList found = QDir(slotInfo.absolutePath())
-            .entryList(QStringList() << (slotInfo.fileName() + ".*"), QDir::Files);
+            .entryList(QStringList() << (slotInfo.fileName() + "*"), QDir::Files);
 
     if (!m_carouselSlideFetchPending.contains(job.baseUrl)) {
         // The carousel this belonged to already finalized/abandoned --
