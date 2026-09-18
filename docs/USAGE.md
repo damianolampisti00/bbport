@@ -13,6 +13,8 @@ The login screen asks for:
 
 Once logged in, the first sync can take a little while on a large account (BBport shows a "Syncing..." spinner over the inbox rather than a half-populated list) — this is a one-time cost per fresh login; a later relaunch of the app resumes from where it left off instead of starting over.
 
+**You only need to do this once.** BBport remembers your login, so relaunching the app goes straight to a brief "Signing in..." step and then the inbox — no need to re-enter anything. You'll only see the login form again after logging out, or if your access token stops being valid (e.g. revoked from another client).
+
 ## The inbox
 
 - **Search** filters the room list as you type.
@@ -28,7 +30,7 @@ Once logged in, the first sync can take a little while on a large account (BBpor
 - Type in the message box and tap the arrow to send.
 - Tap the **📎** to attach a photo from your camera roll.
 - Tap-and-hold the **🎤** to record a voice message; release to finish and send it (or tap once to start/stop, depending on how you've been using it — the icon shows a red square while recording).
-- Tapping a **photo/video/voice message/file** downloads and opens/plays it if it isn't cached locally yet.
+- Tapping a **photo/video/voice message/file** downloads and opens/plays it if it isn't cached locally yet. A playing voice message's slider can be dragged to seek to any point in the recording.
 - Tapping an **Instagram Reel or post** shared into the chat (via a bridged Instagram DM) fetches and plays/views the actual media — Beeper's Instagram bridge only ever sends a thumbnail image otherwise. A **carousel** (a post with several photos/videos to swipe through) opens as a full-screen gallery: swipe to move between slides, swipe past the first/last slide to exit. This needs `parth-dl` available through BerryCore on the device; see the main [README](../README.md#requirements).
 - On a physical-keyboard device, the same **T**/**B** shortcut as the inbox jumps to the top (oldest loaded message) or bottom (most recent) of the conversation.
 
@@ -49,6 +51,8 @@ If you see a banner offering to verify this device, it's because some bridges (e
 ## Notifications
 
 BBport posts to the BlackBerry Hub for messages in rooms you're not currently viewing, with a pop-up preview banner (the same style system apps like Mail use) rather than just a silent Hub entry. This only starts working *after* the very first login's full sync finishes, on purpose — otherwise logging in for the first time would fire a notification for every message in your entire history at once.
+
+This also works with BBport fully closed, not just backgrounded: a background service wakes up roughly every 15 minutes to check for new messages and post any Hub notifications that are due. It's a periodic check, not instant push, so expect up to about 15 minutes of delay for a message that arrives while the app is closed — open the app for immediate delivery.
 
 ## Logging out
 

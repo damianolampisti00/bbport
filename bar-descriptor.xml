@@ -30,14 +30,16 @@
     <!-- entryPointId on the main UI asset + the headless one below, plus the
          matching <entryPoint> declarations further down, are only needed now
          that there are TWO binaries in this one .bar (see BBportHeadless/,
-         step 4 of the persistent-login/headless-push plan): the invoke
-         framework needs a name for each to route bb.action.system.STARTED to
-         the right one. Only wired for Device-Debug so far, deliberately the
-         smallest possible slice (a stub that only logs a boot-time line, see
-         BBportHeadless/src/applicationheadless.cpp) to confirm
-         _sys_run_headless/_sys_headless_nostop actually work on a real
-         device before the real sync service is built on top of it;
-         Device-Release gets the same treatment once that's confirmed. -->
+         the persistent-login/headless-push plan): the invoke framework
+         needs a name for each to route bb.action.system.TIMER_FIRED to the
+         right one. Confirmed working end to end on a real device (real
+         incremental syncs and Hub notifications from a fully-closed app,
+         woken by the recurring timer ApplicationUI registers; see
+         applicationui.cpp), so both Device-Debug and Device-Release carry
+         it now; BBportHeadless.pro doesn't split its build output into a
+         separate directory per configuration the way BBport.pro's own
+         cascades10-based one does (confirmed by actually building both),
+         so both configurations reference the identical relative path. -->
     <configuration name="Device-Debug">
        <platformArchitecture>armle-v7</platformArchitecture>
        <asset entryPointId="BBportUi" path="arm/o.le-v7-g/BBport" entry="true" type="Qnx/Elf">BBport</asset>
@@ -46,7 +48,8 @@
     <configuration name="Device-Release">
        <entryPointType>Qnx/Cascades</entryPointType>
        <platformArchitecture>armle-v7</platformArchitecture>
-       <asset path="arm/o.le-v7/BBport.so" entry="true" type="Qnx/Elf">BBport.so</asset>
+       <asset entryPointId="BBportUi" path="arm/o.le-v7/BBport.so" entry="true" type="Qnx/Elf">BBport.so</asset>
+       <asset entryPointId="BBportHeadless" path="BBportHeadless/arm/BBportHeadless" type="Qnx/Elf">BBportHeadless</asset>
     </configuration>
     <configuration name="Device-Profile">
        <platformArchitecture>armle-v7</platformArchitecture>
@@ -72,11 +75,11 @@
     <!-- A string value of the format <0-999>.<0-999>.<0-999> that represents application version which can be used to check for application upgrade.
          Values can also be 1-part or 2-part. It is not necessary to have a 3-part value.
          An updated version of application must have a versionNumber value higher than the previous version. Required. -->
-    <versionNumber>1.0.1</versionNumber>
+    <versionNumber>1.0.2</versionNumber>
 
     <!-- Fourth digit segment of the package version. First three segments are taken from the
          <versionNumber> element.  Must be an integer from 0 to 2^16-1 -->
-    <buildId>20</buildId>
+    <buildId>0</buildId>
 
     <!-- A string value (such as "v1", "2.5", or "Alpha 1") that represents the version of the application, as it should be shown to users. Optional. -->
     <!-- <versionLabel></versionLabel> -->
@@ -159,11 +162,11 @@
          target is invoked ... with the action bb.action.system.TIMER_FIRED".
          The mime-type is inferred by direct analogy to every other
          bb.action.system.* trigger in this file (...STARTED above uses
-         application/vnd.blackberry.system.event.STARTED); NOT independently
-         confirmed, since no bundled doc or public example pins it down
-         explicitly. Next real-device test is the one that actually verifies
-         this, no reboot needed this time (just wait for the registered
-         interval to elapse). -->
+         application/vnd.blackberry.system.event.STARTED); not pinned down
+         by any bundled doc or public example, but confirmed correct on a
+         real device regardless: this invoke-target fires reliably on the
+         registered interval, and a message sent while the app is fully
+         closed shows up as a real Hub notification by the next wakeup. -->
     <invoke-target id="it.bbport.client.headless" system="false">
         <invoke-target-type>application.headless</invoke-target-type>
         <invoke-target-name>BBport Background Sync</invoke-target-name>
