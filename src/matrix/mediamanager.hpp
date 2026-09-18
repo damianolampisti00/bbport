@@ -85,10 +85,17 @@ public:
     Q_INVOKABLE QVariantList fetchInstagramCarousel(const QString &instagramUrl);
 
     // Transcodes localFilePath (the AudioRecorder's own m4a/AAC output) to
-    // Ogg/Opus via ffmpeg, then uploads the result -- but the uploadFinished
-    // signal still reports localFilePath itself (not the throwaway .ogg
-    // temp file), so callers can key off the exact path they asked to send.
+    // Ogg/Opus, then uploads the result -- but the uploadFinished signal
+    // still reports localFilePath itself (not the throwaway .ogg temp
+    // file), so callers can key off the exact path they asked to send.
     // Falls back to uploading localFilePath as-is if the transcode fails.
+    // Two steps, not one ffmpeg call: this BerryCore ffmpeg build has no
+    // libopus encoder at all (confirmed via a real device's own
+    // `ffmpeg -encoders`), so ffmpeg here only decodes+resamples the AAC to
+    // 48kHz PCM (a native decoder/muxer, unaffected by that), and
+    // OggOpusEncoder (already-linked libopus, same library
+    // OggOpusDecoder already uses for playback) does the actual Opus
+    // encode + Ogg muxing in-process -- see finishAudioTranscodeJob().
     // Ogg/Opus (rather than the m4a/AAC MediaManager would otherwise upload
     // unchanged) is what lets other Matrix clients render this as an inline
     // voice-message bubble instead of a generic "sent an audio file" link --
@@ -183,7 +190,8 @@ private:
 
     struct AudioUploadJob {
         QString originalPath;
-        QString outPath;
+        QString outPath; // final .ogg destination -- written by OggOpusEncoder, not ffmpeg (see uploadAudioAsOgg())
+        QString wavPath; // ffmpeg's own intermediate output: originalPath's audio, decoded+resampled to 48kHz mono PCM
     };
 
     struct InstagramFetchJob {

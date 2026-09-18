@@ -1,6 +1,7 @@
 #include "mediamanager.hpp"
 #include "matrixapi.hpp"
 #include "oggopusdecoder.hpp"
+#include "oggopusencoder.hpp"
 #include "bbportlog.hpp"
 
 #include <bb/data/JsonDataAccess>
@@ -25,6 +26,7 @@ extern "C" {
 #include <QUrl>
 #include <QDateTime>
 #include <QTextStream>
+#include <QtCore/qendian.h>
 #include <cstdlib>
 
 #include <bb/system/InvokeManager>
@@ -800,17 +802,26 @@ void MediaManager::uploadAudioAsOgg(const QString &localFilePath)
 {
     if (localFilePath.isEmpty()) return;
 
+    QString wavPath = localFilePath + ".wav";
     QString outPath = localFilePath + ".ogg";
+    QFile::remove(wavPath);
     QFile::remove(outPath);
 
+    // AAC decode + WAV mux only -- both native to ffmpeg, unlike the actual
+    // Opus encode this used to ask ffmpeg to do directly (see
+    // finishAudioTranscodeJob()'s comment for why that no longer works on
+    // this device's BerryCore build). Mono/48kHz here means
+    // OggOpusEncoder::encodeFromPcm() downstream needs no resampling logic
+    // of its own.
     QStringList args;
     args << "-y" << "-i" << localFilePath
-         << "-c:a" << "libopus" << "-b:a" << "32k" << "-vbr" << "on" << "-application" << "voip"
-         << outPath;
+         << "-ar" << "48000" << "-ac" << "1" << "-f" << "wav"
+         << wavPath;
 
     AudioUploadJob job;
     job.originalPath = localFilePath;
     job.outPath = outPath;
+    job.wavPath = wavPath;
 
     QProcess *proc = new QProcess(this);
     proc->setProcessEnvironment(berryCoreEnvironment());
@@ -835,11 +846,34 @@ void MediaManager::onAudioTranscodeError(QProcess::ProcessError error)
     finishAudioTranscodeJob(proc, false);
 }
 
-// Falls back to uploading the original (untranscoded) recording on any
-// ffmpeg failure -- same "never block the send outright" philosophy as
-// finishFfmpegJob() for incoming video. The recipient still gets a playable
-// file, just as plain audio/mp4 (no inline voice-bubble rendering) instead
-// of a proper Ogg/Opus voice message.
+// Reads a RIFF/WAVE file (as ffmpeg's own "-f wav" writes it: fmt chunk
+// might not immediately precede data, so this walks chunks by id rather
+// than assuming fixed offsets) and returns just the "data" chunk's raw
+// bytes -- the 16-bit PCM samples OggOpusEncoder::encodeFromPcm() wants.
+static bool extractWavPcm(const QByteArray &wav, QByteArray *pcmOut)
+{
+    if (wav.size() < 12 || !wav.startsWith("RIFF") || wav.mid(8, 4) != "WAVE") return false;
+    int pos = 12;
+    while (pos + 8 <= wav.size()) {
+        QByteArray chunkId = wav.mid(pos, 4);
+        quint32 chunkSize = qFromLittleEndian<quint32>(reinterpret_cast<const uchar*>(wav.constData()) + pos + 4);
+        int dataStart = pos + 8;
+        if (dataStart + int(chunkSize) > wav.size()) break;
+        if (chunkId == "data") {
+            *pcmOut = wav.mid(dataStart, int(chunkSize));
+            return !pcmOut->isEmpty();
+        }
+        pos = dataStart + int(chunkSize) + (chunkSize % 2); // chunks are word-aligned
+    }
+    return false;
+}
+
+// Falls back to uploading the original (untranscoded) recording if either
+// step fails -- ffmpeg's AAC decode, or (new) the native Opus encode below
+// -- same "never block the send outright" philosophy as finishFfmpegJob()
+// for incoming video. The recipient still gets a playable file, just as
+// plain audio/mp4 (no inline voice-bubble rendering) instead of a proper
+// Ogg/Opus voice message.
 void MediaManager::finishAudioTranscodeJob(QProcess *proc, bool succeeded)
 {
     AudioUploadJob job = m_audioUploadJobs.take(proc);
@@ -851,7 +885,28 @@ void MediaManager::finishAudioTranscodeJob(QProcess *proc, bool succeeded)
 
     proc->deleteLater();
 
-    bool haveOgg = succeeded && QFile::exists(job.outPath);
+    bool haveOgg = false;
+    if (succeeded && QFile::exists(job.wavPath)) {
+        QFile wavFile(job.wavPath);
+        QByteArray pcm;
+        if (wavFile.open(QIODevice::ReadOnly) && extractWavPcm(wavFile.readAll(), &pcm)) {
+            QByteArray oggBytes;
+            if (OggOpusEncoder::encodeFromPcm(pcm, 1, &oggBytes)) {
+                QFile outFile(job.outPath);
+                if (outFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                    outFile.write(oggBytes);
+                    outFile.close();
+                    haveOgg = true;
+                }
+            } else {
+                debugLog("  OggOpusEncoder::encodeFromPcm failed");
+            }
+        } else {
+            debugLog("  couldn't read/parse ffmpeg's WAV output");
+        }
+    }
+    QFile::remove(job.wavPath);
+
     if (!haveOgg) debugLog("  falling back to untranscoded m4a upload");
     QString uploadPath = haveOgg ? job.outPath : job.originalPath;
     if (haveOgg) m_uploadPathRemap[uploadPath] = job.originalPath;
