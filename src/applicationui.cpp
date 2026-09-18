@@ -60,7 +60,7 @@ ApplicationUI::ApplicationUI() :
     m_mediaManager = new MediaManager(m_matrixApi, this);
     m_roomListModel = new RoomListModel(m_matrixApi, m_mediaManager, this);
     m_messageListModel = new MessageListModel(m_matrixApi, m_timelineStore, m_mediaManager, m_keyBackupManager, m_olmCryptoManager, this);
-    m_notificationManager = new NotificationManager(m_matrixApi, m_messageListModel, m_roomListModel, m_syncEngine, this);
+    m_notificationManager = new NotificationManager(m_matrixApi, m_syncEngine, this);
 
     connect(m_matrixApi, SIGNAL(loginSucceeded()), m_syncEngine, SLOT(start()));
     connect(m_matrixApi, SIGNAL(loginSucceeded()), m_olmCryptoManager, SLOT(start()));
@@ -78,6 +78,11 @@ ApplicationUI::ApplicationUI() :
     connect(m_syncEngine, SIGNAL(eventRedacted(QString,QString)), m_timelineStore, SLOT(onEventRedacted(QString,QString)));
 
     connect(m_syncEngine, SIGNAL(timelineEvent(QString,QVariantMap)), m_notificationManager, SLOT(onTimelineEvent(QString,QVariantMap)));
+    // roomIdChanged() itself carries no argument, so this needs a small
+    // bridge slot to re-read messageListModel's own roomId() and forward it
+    // on -- NotificationManager doesn't hold a MessageListModel pointer at
+    // all (see notificationmanager.hpp's own comment on why).
+    connect(m_messageListModel, SIGNAL(roomIdChanged()), this, SLOT(onCurrentRoomIdChanged()));
 
     connect(m_syncEngine, SIGNAL(roomUpdated(QString,QVariantMap)), m_olmCryptoManager, SLOT(onRoomUpdated(QString,QVariantMap)));
     connect(m_syncEngine, SIGNAL(toDeviceEvent(QVariantMap)), m_olmCryptoManager, SLOT(handleToDeviceEvent(QVariantMap)));
@@ -184,6 +189,11 @@ ApplicationUI::ApplicationUI() :
     } else {
         bbportLog("[BBport] registerTimer() returned null -- request could not even be sent");
     }
+}
+
+void ApplicationUI::onCurrentRoomIdChanged()
+{
+    m_notificationManager->setCurrentRoomId(m_messageListModel->roomId());
 }
 
 void ApplicationUI::onHeadlessTimerRegistered()

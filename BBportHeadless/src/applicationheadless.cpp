@@ -1,35 +1,82 @@
 #include "applicationheadless.hpp"
 #include "bbportlog.hpp"
 
+#include "matrixapi.hpp"
+#include "keybackupmanager.hpp"
+#include "olmcryptomanager.hpp"
+#include "syncengine.hpp"
+#include "notificationmanager.hpp"
+
 #include <bb/system/InvokeManager>
 #include <bb/system/InvokeRequest>
+
 #include <QCoreApplication>
+#include <QTimer>
 
 ApplicationHeadless::ApplicationHeadless() :
         QObject(),
         m_invokeManager(new bb::system::InvokeManager(this))
 {
-    // Logged unconditionally at construction (before any invoke is even
-    // received) so the shared debug log distinguishes "the OS launched this
-    // binary at all" from "it received the STARTED invoke" -- if only the
-    // second line is missing on the next boot, that narrows the failure to
-    // the invoke-target filter/action rather than the permissions or
-    // packaging.
     bbportLog("[BBportHeadless] process started");
-
     connect(m_invokeManager, SIGNAL(invoked(bb::system::InvokeRequest)), this, SLOT(onInvoked(bb::system::InvokeRequest)));
+
+    // Same non-UI object graph ApplicationUI itself builds (applicationui.cpp),
+    // minus TimelineStore/MediaManager/RoomListModel/MessageListModel -- see
+    // this class's own header comment for why.
+    m_matrixApi = new MatrixApi(this);
+    m_keyBackupManager = new KeyBackupManager(m_matrixApi, this);
+    m_olmCryptoManager = new OlmCryptoManager(m_matrixApi, m_keyBackupManager, this);
+    m_matrixApi->setPreferredDeviceId(m_olmCryptoManager->deviceId());
+    m_syncEngine = new SyncEngine(m_matrixApi, m_keyBackupManager, m_olmCryptoManager, this);
+    m_notificationManager = new NotificationManager(m_matrixApi, m_syncEngine, this);
+
+    connect(m_matrixApi, SIGNAL(loginSucceeded()), m_olmCryptoManager, SLOT(start()));
+    connect(m_matrixApi, SIGNAL(loginSucceeded()), this, SLOT(onLoginSucceeded()));
+    connect(m_matrixApi, SIGNAL(loginFailed(QString)), this, SLOT(onLoginFailed(QString)));
+
+    connect(m_syncEngine, SIGNAL(roomUpdated(QString,QVariantMap)), m_olmCryptoManager, SLOT(onRoomUpdated(QString,QVariantMap)));
+    connect(m_syncEngine, SIGNAL(toDeviceEvent(QVariantMap)), m_olmCryptoManager, SLOT(handleToDeviceEvent(QVariantMap)));
+    connect(m_syncEngine, SIGNAL(timelineEvent(QString,QVariantMap)), m_notificationManager, SLOT(onTimelineEvent(QString,QVariantMap)));
+    connect(m_syncEngine, SIGNAL(singleSyncFinished(bool)), this, SLOT(onSingleSyncFinished(bool)));
+
+    // tryAutoLogin() is a silent no-op if session.json doesn't exist (no
+    // loginSucceeded/loginFailed either) -- nothing to sync in that case,
+    // so there's nothing to wait for; quit right away rather than sitting
+    // in the event loop forever. Deferred via singleShot(0, ...) rather
+    // than calling quit() straight from the constructor, since a
+    // QCoreApplication::exec() that hasn't started yet (main() hasn't
+    // reached Application::exec() at this point) has nothing to quit.
+    m_matrixApi->tryAutoLogin();
+    if (!m_matrixApi->hasSavedSession()) {
+        bbportLog("[BBportHeadless] no saved session, nothing to do");
+        QTimer::singleShot(0, QCoreApplication::instance(), SLOT(quit()));
+    }
 }
 
 void ApplicationHeadless::onInvoked(const bb::system::InvokeRequest &request)
 {
     bbportLog(QString("[BBportHeadless] invoked action=%1 mimeType=%2")
                   .arg(request.action()).arg(request.mimeType()));
+}
 
-    // Short-running headless (_sys_run_headless, no _sys_headless_nostop --
-    // see bar-descriptor.xml's invoke-target comment) means this process is
-    // expected to do its bounded bit of work and exit, not stay resident
-    // waiting for another invoke. Nothing to actually do yet at this smoke-
-    // test stage beyond the log line above; quitting immediately proves this
-    // half of the contract too, ahead of wiring in a real sync pass.
+void ApplicationHeadless::onLoginSucceeded()
+{
+    bbportLog("[BBportHeadless] login ok, starting single sync pass");
+    m_syncEngine->startOnce();
+}
+
+void ApplicationHeadless::onLoginFailed(const QString &error)
+{
+    // A revoked/expired token, or no network right now -- either way,
+    // nothing more to do until the next scheduled wakeup 15 minutes from
+    // now (or the user re-logs in via the foreground app, which writes a
+    // fresh session.json this'll pick up next time).
+    bbportLog("[BBportHeadless] login failed: " + error);
+    QCoreApplication::instance()->quit();
+}
+
+void ApplicationHeadless::onSingleSyncFinished(bool ok)
+{
+    bbportLog(QString("[BBportHeadless] single sync finished ok=%1, quitting").arg(ok));
     QCoreApplication::instance()->quit();
 }

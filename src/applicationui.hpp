@@ -67,6 +67,11 @@ private slots:
     // timer actually registered, since registerTimer() is asynchronous and
     // this project has no console attached to a standalone install.
     void onHeadlessTimerRegistered();
+    // Bridges MessageListModel::roomIdChanged() (no argument) to
+    // NotificationManager::setCurrentRoomId(QString) -- see
+    // notificationmanager.hpp's own comment on why it holds a plain roomId
+    // string instead of a MessageListModel pointer.
+    void onCurrentRoomIdChanged();
 private:
     QTranslator* m_pTranslator;
     bb::cascades::LocaleHandler* m_pLocaleHandler;

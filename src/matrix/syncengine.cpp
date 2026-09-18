@@ -128,6 +128,7 @@ SyncEngine::SyncEngine(MatrixApi *api, KeyBackupManager *keyBackup, OlmCryptoMan
         m_keyBackup(keyBackup),
         m_olmCrypto(olmCrypto),
         m_running(false),
+        m_singleShot(false),
         m_initialSyncDone(false),
         m_currentReply(0),
         m_watchdog(new QTimer(this)),
@@ -173,6 +174,16 @@ bool SyncEngine::isInitialSyncDone() const
 void SyncEngine::start()
 {
     if (m_running) return;
+    m_running = true;
+    emit runningChanged();
+    loadRoomCache();
+    doSync();
+}
+
+void SyncEngine::startOnce()
+{
+    if (m_running) return;
+    m_singleShot = true;
     m_running = true;
     emit runningChanged();
     loadRoomCache();
@@ -324,12 +335,28 @@ void SyncEngine::onSyncReplyFinished()
             // timeout -- a normal part of the /sync cycle, not a failure,
             // so retry immediately and don't touch the backoff streak.
             bbportLog(QString("[BBport:sync] long-poll timed out after %1 ms (normal), retrying").arg(elapsedMs));
+            if (m_singleShot) {
+                // "Timed out with nothing new" is itself a perfectly normal
+                // single-shot outcome, not a failure to report -- there was
+                // simply nothing to fetch this wakeup.
+                m_running = false;
+                emit singleSyncFinished(true);
+                return;
+            }
             doSync();
             return;
         }
         bbportLog(QString("[BBport:sync] FAILED after %1 ms netError=%2 backoffMs=%3")
                       .arg(elapsedMs).arg(int(netError)).arg(m_retryBackoffMs));
         emit syncError("Sync failed: invalid response from server.");
+        if (m_singleShot) {
+            // No backoff retry here -- the next scheduled headless wakeup
+            // (15 minutes away, see ApplicationUI's registerTimer() call)
+            // is this mode's own retry, so nothing further to do now.
+            m_running = false;
+            emit singleSyncFinished(false);
+            return;
+        }
         // A genuine failure (network error, bad JSON, server error): retry
         // with exponential backoff instead of immediately, so a lost/flaky
         // connection can't turn into a tight loop hammering the radio and
@@ -389,6 +416,11 @@ void SyncEngine::onSyncReplyFinished()
                   .arg(roomsObj.value("invite").toMap().size()).arg(toDeviceEvents.size())
                   .arg(m_cycleDecryptOk).arg(m_cycleDecryptFailed));
 
+    if (m_singleShot) {
+        m_running = false;
+        emit singleSyncFinished(true);
+        return;
+    }
     doSync();
 }
 

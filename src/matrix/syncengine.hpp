@@ -40,9 +40,24 @@ public:
 public slots:
     void start();
     void stop();
+    // For a short-running headless invocation (see ApplicationHeadless),
+    // not the continuously-polling foreground app: does exactly one /sync
+    // round trip (success, a normal idle long-poll timeout with nothing
+    // new, or a genuine failure alike -- see singleSyncFinished()), then
+    // stops without touching the persisted since-token/room cache the way
+    // stop() deliberately does for logout. Whatever ran (timelineEvent(),
+    // etc.) has already fired by the time singleSyncFinished() does.
+    void startOnce();
 
 signals:
     void runningChanged();
+    // Fires exactly once, only after startOnce() (never after start()),
+    // once that single /sync round trip has fully concluded one way or
+    // another. ok is true for a real response OR a normal "nothing new"
+    // long-poll timeout, false only for a genuine transport/parse failure
+    // -- either way there's always a next scheduled wakeup to try again,
+    // so this never retries on its own the way the continuous loop does.
+    void singleSyncFinished(bool ok);
     // Fires exactly once per app session, right after the first /sync
     // response finishes processing (see the initialSyncDone Q_PROPERTY
     // above). Note this fires AFTER every timelineEvent()/roomUpdated() etc.
@@ -127,6 +142,7 @@ private:
     KeyBackupManager *m_keyBackup;
     OlmCryptoManager *m_olmCrypto;
     bool m_running;
+    bool m_singleShot; // set by startOnce(), never by start() -- see its own doc comment
     bool m_initialSyncDone;
     QString m_since;
     QNetworkReply *m_currentReply;

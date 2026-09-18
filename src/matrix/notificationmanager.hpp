@@ -4,10 +4,9 @@
 #include <QObject>
 #include <QString>
 #include <QVariantMap>
+#include <QHash>
 
 class MatrixApi;
-class MessageListModel;
-class RoomListModel;
 class SyncEngine;
 
 // Posts a bb::platform::Notification (Hub entry, plus LED/sound/preview per
@@ -19,21 +18,43 @@ class SyncEngine;
 // initial /sync (potentially hundreds of historical events across every
 // room) has finished -- without this, first login/launch used to fire a
 // notification storm for messages the user already read elsewhere.
+//
+// Deliberately depends on nothing but MatrixApi and SyncEngine -- both
+// already-proven-safe plain QObjects -- rather than RoomListModel/
+// MessageListModel directly: ApplicationHeadless's own object graph has no
+// UI-facing models at all (RoomListModel specifically owns a
+// bb::cascades::ArrayDataModel, not safe to construct outside a real
+// Cascades Application), and since neither class inlines its accessors,
+// even a guarded/never-actually-called `if (ptr) ptr->method()` would still
+// need those symbols at link time, dragging in that whole dependency chain
+// regardless of the runtime null check. So instead: setCurrentRoomId()
+// gives ApplicationUI a way to report "this room is open right now"
+// without exposing MessageListModel itself, and room names for the
+// notification title come from listening to SyncEngine's own roomUpdated()
+// directly rather than querying RoomListModel for them.
 class NotificationManager : public QObject
 {
     Q_OBJECT
 
 public:
-    explicit NotificationManager(MatrixApi *api, MessageListModel *messageListModel, RoomListModel *roomListModel, SyncEngine *syncEngine, QObject *parent = 0);
+    explicit NotificationManager(MatrixApi *api, SyncEngine *syncEngine, QObject *parent = 0);
 
 public slots:
     void onTimelineEvent(const QString &roomId, const QVariantMap &event);
+    // ApplicationUI forwards MessageListModel::roomIdChanged() here (see its
+    // own onCurrentRoomIdChanged() bridge slot) so a notification is
+    // suppressed for whichever room is currently open on-screen. Never
+    // called at all in ApplicationHeadless, where nothing is ever "open".
+    void setCurrentRoomId(const QString &roomId);
+
+private slots:
+    void onRoomUpdated(const QString &roomId, const QVariantMap &summary);
 
 private:
     MatrixApi *m_api;
-    MessageListModel *m_messageListModel;
-    RoomListModel *m_roomListModel;
     SyncEngine *m_syncEngine;
+    QString m_currentRoomId;
+    QHash<QString, QString> m_roomNames; // roomId -> display name, fed by onRoomUpdated()
 };
 
 #endif /* NOTIFICATIONMANAGER_HPP_ */
