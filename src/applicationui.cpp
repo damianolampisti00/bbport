@@ -29,7 +29,10 @@
 
 #include <QtDeclarative/qdeclarative.h>
 #include <QFile>
+#include <QDir>
 #include <QTextStream>
+
+#include <unistd.h>
 
 #include <bb/cascades/Application>
 #include <bb/cascades/QmlDocument>
@@ -50,6 +53,23 @@ using namespace bb::cascades;
 ApplicationUI::ApplicationUI() :
         QObject()
 {
+    // Foreground liveness marker: ApplicationHeadless checks this (see its
+    // own comment) before doing its own sync pass, so the two never end up
+    // running /sync concurrently for the same account -- confirmed on a
+    // real device this was actually happening (a headless wakeup landing
+    // while this app was already open, both mid-sync at once), which risked
+    // not just wasted battery/radio but the same incoming message getting
+    // a duplicate Hub notification from both sides independently. Written
+    // as a plain PID, not a heartbeat/lock file: a stale one left behind by
+    // a crash is harmless, since kill(pid, 0) (see the headless side)
+    // correctly reports a dead PID as not running with no staleness window
+    // to reason about. Never explicitly removed on exit for the same
+    // reason -- there'd be nothing to gain from it.
+    QFile pidFile(QDir::homePath() + "/foreground.pid");
+    if (pidFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        pidFile.write(QByteArray::number(getpid()));
+    }
+
     // --- Matrix backend wiring ---
     m_matrixApi = new MatrixApi(this);
     m_keyBackupManager = new KeyBackupManager(m_matrixApi, this);
