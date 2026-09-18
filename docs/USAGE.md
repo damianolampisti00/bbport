@@ -29,7 +29,7 @@ Once logged in, the first sync can take a little while on a large account (BBpor
 - Tap the **📎** to attach a photo from your camera roll.
 - Tap-and-hold the **🎤** to record a voice message; release to finish and send it (or tap once to start/stop, depending on how you've been using it — the icon shows a red square while recording).
 - Tapping a **photo/video/voice message/file** downloads and opens/plays it if it isn't cached locally yet.
-- Tapping an **Instagram Reel or post** shared into the chat (via a bridged Instagram DM) fetches and plays/views the actual media — Beeper's Instagram bridge only ever sends a thumbnail image otherwise. A **carousel** (a post with several photos/videos to swipe through) opens as a full-screen gallery: swipe (or use the on-screen `‹`/`›` buttons) to move between slides, swipe past the first/last slide to exit. This needs `parth-dl` available through BerryCore on the device; see the main [README](../README.md#requirements).
+- Tapping an **Instagram Reel or post** shared into the chat (via a bridged Instagram DM) fetches and plays/views the actual media — Beeper's Instagram bridge only ever sends a thumbnail image otherwise. A **carousel** (a post with several photos/videos to swipe through) opens as a full-screen gallery: swipe to move between slides, swipe past the first/last slide to exit. This needs `parth-dl` available through BerryCore on the device; see the main [README](../README.md#requirements).
 - On a physical-keyboard device, the same **T**/**B** shortcut as the inbox jumps to the top (oldest loaded message) or bottom (most recent) of the conversation.
 
 ### Long-press menu

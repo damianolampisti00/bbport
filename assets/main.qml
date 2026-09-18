@@ -638,8 +638,10 @@ NavigationPane {
                     }
 
                     // Position indicator, purely informational (not a tap
-                    // target -- swiping/the edge buttons are the only way to
-                    // move, same as the rest of this page).
+                    // target -- swiping is the only way to move between
+                    // slides, confirmed reliable enough on real hardware
+                    // that the fallback prev/next buttons this used to also
+                    // have alongside it were removed).
                     Label {
                         visible: slideCount > 1
                         text: (currentIndex + 1) + " / " + slideCount
@@ -648,46 +650,6 @@ NavigationPane {
                         topMargin: ui.du(1.5)
                         textStyle.color: Color.White
                         textStyle.base: SystemDefaults.TextStyles.SmallText
-                    }
-
-                    // Fallback navigation for whenever the swipe gesture
-                    // above doesn't land reliably on real hardware -- see
-                    // conversation. Plain Buttons (not nested delegate
-                    // content) at Page scope are already proven to work
-                    // fine here, same as videoViewerPage's Play/Pause.
-                    Button {
-                        text: "‹"
-                        visible: slideCount > 1
-                        appearance: ControlAppearance.Plain
-                        color: Color.White
-                        preferredWidth: ui.du(8)
-                        horizontalAlignment: HorizontalAlignment.Left
-                        verticalAlignment: VerticalAlignment.Center
-                        onClicked: {
-                            if (currentIndex > 0) {
-                                currentIndex = currentIndex - 1;
-                                refreshCurrentSlide();
-                            } else {
-                                navigationPane.pop();
-                            }
-                        }
-                    }
-                    Button {
-                        text: "›"
-                        visible: slideCount > 1
-                        appearance: ControlAppearance.Plain
-                        color: Color.White
-                        preferredWidth: ui.du(8)
-                        horizontalAlignment: HorizontalAlignment.Right
-                        verticalAlignment: VerticalAlignment.Center
-                        onClicked: {
-                            if (currentIndex < slideCount - 1) {
-                                currentIndex = currentIndex + 1;
-                                refreshCurrentSlide();
-                            } else {
-                                navigationPane.pop();
-                            }
-                        }
                     }
 
                     Container {
