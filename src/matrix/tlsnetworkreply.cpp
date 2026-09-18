@@ -4,7 +4,6 @@
 #ifdef BBPORT_HAVE_NATIVE_TLS
 
 #include <string.h>
-#include <stdio.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 
@@ -13,6 +12,7 @@
 #include <QVariant>
 #include <QDebug>
 #include <QAtomicInt>
+#include <QHash>
 
 #include "mbedtls/ssl.h"
 #include "mbedtls/entropy.h"
@@ -20,32 +20,21 @@
 #include "mbedtls/x509_crt.h"
 #include "mbedtls/error.h"
 
-// Temporary diagnostic logging (TLS transport bring-up) -- writes straight to
-// a file instead of qWarning()/slog2, since qWarning() output wasn't showing
-// up in slog2info in testing (build/config issue, unconfirmed which). Remove
-// once the E2EE key-exchange regression is root-caused.
 namespace {
-QMutex g_logMutex;
-void appendDebugLog(const QString &line)
-{
-    QMutexLocker locker(&g_logMutex);
-    FILE *f = fopen("/accounts/1000/shared/misc/bbport_tls_log.txt", "a");
-    if (!f) return;
-    QByteArray utf8 = (line + "\n").toUtf8();
-    fwrite(utf8.constData(), 1, utf8.size(), f);
-    fclose(f);
-}
 
-// TEMPORARY diagnostic (see conversation): pinpoint which requests'
+// Live thread/reply counts (see conversation): pinpoint which requests'
 // TlsRequestThread/TlsNetworkReply pair is never destroyed. Every create/
-// destroy logs the live count and the URL via qDebug (this reaches
-// Momentics' own console over the live debug connection, unlike
-// qWarning/slog2info -- see the comment above). If the live counts climb
-// without bound, whichever URL shows a "+thread"/"+reply" with no matching
-// "-thread"/"-reply" by the time it crashes is the leak; if instead every
-// create is matched by a destroy but the count is still huge at once, it's
-// an unbounded-concurrency burst (e.g. an unbatched key-query fan-out)
-// rather than a leak. Remove once the thread-count regression is fixed.
+// destroy logs the live count and the URL via bbportLog(). If the live
+// counts ever climb without bound again, whichever URL shows a "+thread"/
+// "+reply" with no matching "-thread"/"-reply" by the time it crashes is
+// the leak; if instead every create is matched by a destroy but the count
+// is still huge at once, it's an unbounded-concurrency burst (e.g. an
+// unbatched key-query fan-out) rather than a leak. Cheap enough (one
+// atomic op alongside a log line already being written for other reasons)
+// to leave in permanently as a standing diagnostic, unlike the separate
+// bbport_tls_log.txt file this used to also write on every single request/
+// response -- that one was genuinely temporary bring-up logging and has
+// been removed now that the regression it was tracking is long fixed.
 QAtomicInt g_liveThreads(0);
 QAtomicInt g_liveReplies(0);
 }
@@ -81,6 +70,72 @@ TlsCaStore* caStore()
         g_caStore = new TlsCaStore();
     }
     return g_caStore;
+}
+
+// TLS session cache, keyed by host, so a repeat connection to the same host
+// (overwhelmingly the homeserver itself: every ~30s /sync long-poll plus
+// whatever else runs alongside it) can do mbedTLS's much cheaper abbreviated
+// resumption handshake instead of a full one. A full TLS handshake means a
+// fresh asymmetric key exchange (ECDHE) and certificate chain verification
+// every single time -- by far the most expensive thing this app does on a
+// ~1.2GHz Cortex-A9 with no crypto acceleration, and it was happening on a
+// strict, unavoidable ~30s cycle for as long as the app stayed open,
+// regardless of whether anything had actually changed. Resumption is purely
+// additive/safe: mbedTLS falls back to a full handshake on its own if the
+// server doesn't recognize/accept the offered session (expired, evicted,
+// server restarted, ...), so there's no failure mode here worse than "no
+// speedup this time." Sessions are copied in and out via
+// mbedtls_ssl_get_session()/set_session() (both documented as deep,
+// independent copies -- see their own doc comments in mbedtls/ssl.h), so
+// the cached copy here is safe to reuse across many concurrent
+// TlsRequestThreads without any of them able to mutate what another is
+// mid-read of.
+QMutex g_sessionCacheMutex;
+QHash<QString, mbedtls_ssl_session*> g_sessionCache;
+
+// Called right after mbedtls_ssl_setup() succeeds, before the handshake --
+// a no-op (mbedTLS just proceeds with a full handshake as usual) if this
+// host has never been resumed before.
+void tryResumeSession(mbedtls_ssl_context *ssl, const QString &host)
+{
+    bool attempted = false;
+    {
+        // Held across the set_session() call itself, not just the lookup:
+        // set_session() reads from `cached` synchronously to make its own
+        // copy, so it must not race a concurrent cacheSessionFor() call for
+        // the same host freeing that exact pointer out from under it.
+        QMutexLocker locker(&g_sessionCacheMutex);
+        mbedtls_ssl_session *cached = g_sessionCache.value(host, 0);
+        if (cached) {
+            mbedtls_ssl_set_session(ssl, cached);
+            attempted = true;
+        }
+    }
+    if (attempted) bbportLog("[BBport:tls] attempting session resumption for " + host);
+}
+
+// Called after a successful, verified handshake -- replaces whatever was
+// previously cached for this host (an existing entry is already stale the
+// moment a new full/resumed handshake just completed) so the next request
+// to the same host gets the freshest ticket.
+void cacheSessionFor(mbedtls_ssl_context *ssl, const QString &host)
+{
+    mbedtls_ssl_session *session = new mbedtls_ssl_session();
+    mbedtls_ssl_session_init(session);
+    if (mbedtls_ssl_get_session(ssl, session) != 0) {
+        mbedtls_ssl_session_free(session);
+        delete session;
+        return;
+    }
+
+    QMutexLocker locker(&g_sessionCacheMutex);
+    mbedtls_ssl_session *old = g_sessionCache.value(host, 0);
+    g_sessionCache[host] = session;
+    locker.unlock();
+    if (old) {
+        mbedtls_ssl_session_free(old);
+        delete old;
+    }
 }
 
 // Case-insensitive lookup into a parsed header list.
@@ -334,6 +389,7 @@ void TlsRequestThread::run()
 
     if (!failed) {
         mbedtls_ssl_set_bio(&ssl, &m_netCtx, mbedtls_net_send, mbedtls_net_recv, mbedtls_net_recv_timeout);
+        tryResumeSession(&ssl, QString::fromUtf8(hostUtf8));
 
         while ((ret = mbedtls_ssl_handshake(&ssl)) != 0) {
             if (wasAborted()) {
@@ -360,6 +416,13 @@ void TlsRequestThread::run()
             netError = QNetworkReply::SslHandshakeFailedError;
             netErrorString = QString("Invalid certificate: %1").arg(QString::fromLatin1(vbuf).trimmed());
             failed = true;
+        } else {
+            // Verified (full handshake) or carried over from a prior
+            // verified handshake (resumed -- see mbedtls_ssl_get_verify_result()'s
+            // own doc comment on why that's still trustworthy here) alike:
+            // cache it so the *next* request to this host can attempt
+            // resumption too.
+            cacheSessionFor(&ssl, QString::fromUtf8(hostUtf8));
         }
     }
 
@@ -562,40 +625,16 @@ void TlsRequestThread::run()
     mbedtls_ctr_drbg_free(&ctr_drbg);
     mbedtls_entropy_free(&entropy);
 
-    // Temporary diagnostic logging (TLS transport bring-up) -- remove once
-    // the E2EE key-exchange regression is root-caused. Never logs the
-    // request/response body for /sync (message content) or the
-    // Authorization header; crypto-handshake endpoints get a body preview
-    // since their payload is just device-key JSON, not chat content.
-    // Built via plain concatenation, not QString::arg() chaining: these
-    // values (URLs/paths especially) routinely contain literal "%2F"-style
-    // percent-encoding, and a later .arg() call in a chain will happily
-    // treat a stray "%2" inside an already-substituted value as its own
-    // placeholder and overwrite it -- confirmed on-device turning
-    // "...ND%2F2026..." into "...ND200F2026..." (the status code eating the
-    // escaped slash). QString::arg() itself is fine; chaining several
-    // calls after inserting untrusted/dynamic text is not.
-    bool isCryptoEndpoint = path.contains("/keys/") || path.contains("/sendToDevice/");
-    appendDebugLog(m_method + " " + QString::fromUtf8(path) +
-                   " status=" + QString::number(httpStatus) +
-                   " bodyBytes=" + QString::number(responseBody.size()) +
-                   " netError=" + QString::number(int(netError)) +
-                   " " + netErrorString);
-    if (isCryptoEndpoint) {
-        appendDebugLog("  reqBody=" + QString::fromUtf8(m_body.left(500)));
-        appendDebugLog("  respBody=" + QString::fromUtf8(responseBody.left(500)));
-    } else if (httpStatus >= 400) {
-        // Non-crypto endpoints normally never log bodies (chat content), but
-        // a 4xx/5xx error body is never message content -- for media
-        // downloads specifically this is what should have the S3/R2
-        // rejection reason (SignatureDoesNotMatch, AccessDenied, etc.).
-        appendDebugLog("  errRespBody=" + QString::fromUtf8(responseBody.left(1000)));
-    }
-
+    // Per-request outcome is already visible via bbportLog() at the
+    // TlsNetworkReply layer (+reply/-reply/worker finished, with URL/status/
+    // error) -- this used to ALSO write a full second copy of every
+    // request/response (including crypto-endpoint body previews) to a
+    // separate bbport_tls_log.txt file for a since-fixed E2EE regression.
+    // That doubled the disk I/O of every single TLS request/long-poll
+    // forever, for a debugging need that no longer exists; removed rather
+    // than left "temporarily" running indefinitely.
     if (!failed && !redirectLocation.isEmpty() && redirectCount < kMaxRedirects) {
         QUrl redirectUrl = currentUrl.resolved(QUrl::fromEncoded(redirectLocation));
-        appendDebugLog("  following redirect status=" + QString::number(httpStatus) +
-                       " -> " + redirectUrl.toString());
         currentUrl = redirectUrl;
         continue;
     }
