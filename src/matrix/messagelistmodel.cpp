@@ -66,6 +66,11 @@ void MessageRowActions::remove()
     if (m_owner) m_owner->redactMessage(m_eventId);
 }
 
+void MessageRowActions::seek(int ms)
+{
+    if (m_owner && m_owner->playingAudioEventId() == m_eventId) m_owner->setSeekRequestMs(ms);
+}
+
 // Same msgtype->preview-label mapping the composer's reply banner needs,
 // previously duplicated in QML (main.qml's onTriggered) -- centralized here
 // since rowActionsFor() below needs it too now.

@@ -65,6 +65,16 @@ public:
     // Named remove(), not delete() -- delete is a C++ keyword. Sends
     // m.room.redaction for this event.
     Q_INVOKABLE void remove();
+    // Called from the delegate's own scrub-bar Slider (MessageBubbleContent.qml)
+    // when the user drags it -- forwards to MessageListModel::setSeekRequestMs(),
+    // which main.qml's Page-scope watcher turns into the actual
+    // chatAudioPlayer.seekTime() call (see that property's own doc comment
+    // on why the indirection). No-ops if this row isn't the one currently
+    // loaded in the shared player -- dragging a bubble that merely looks
+    // like it has a position (every row defaults its scrub bar to 0 until
+    // it's actually the active track) must never seek whatever unrelated
+    // track happens to be playing.
+    Q_INVOKABLE void seek(int ms);
 
 private:
     MessageListModel *m_owner;

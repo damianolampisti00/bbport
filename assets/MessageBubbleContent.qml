@@ -179,18 +179,23 @@ Container {
         }
     }
     Container {
-        // Scrub bar: read-only progress display, driven purely
-        // by ListItemData (see above) -- dragging it can't
-        // forward a seek request back to chatAudioPlayer since
-        // that's Page-scope and unreachable from here, so there's
-        // no onValueChanged handler; seek-by-drag would need a
-        // different mechanism (e.g. a row tap gesture at
-        // Page/ListView scope) if wanted later.
+        // Scrub bar: draggable, forwarding to the shared chatAudioPlayer via
+        // ListItemData.actions.seek() -- the one channel a delegate has back
+        // into C++ (see MessageRowActions' own class comment). value is ALSO
+        // driven by ListItemData.audioLivePositionMs (ordinary playback
+        // advancing it every position tick), so onValueChanged can't just
+        // forward every change as a seek -- that would seek continuously
+        // during normal playback. Same fix already proven for
+        // videoViewerPage's own scrub bar: a real user drag jumps the value
+        // well away from where normal playback last put it, so only forward
+        // it when the gap is bigger than a single tick could ever explain.
+        // seek() itself additionally no-ops unless this row is actually the
+        // active track (see its own comment), so dragging a bubble that
+        // isn't playing is inert either way.
         visible: ListItemData.msgtype === "m.audio" && ListItemData.mediaLocalUrl && ListItemData.mediaLocalUrl.length > 0
         layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
         bottomMargin: ui.du(0.4)
         Slider {
-            enabled: false
             layoutProperties: StackLayoutProperties { spaceQuota: 1 }
             fromValue: 0
             toValue: {
@@ -198,6 +203,12 @@ Container {
                 return d > 0 ? d : 1;
             }
             value: ListItemData.audioLivePositionMs ? ListItemData.audioLivePositionMs : 0
+            onValueChanged: {
+                var current = ListItemData.audioLivePositionMs ? ListItemData.audioLivePositionMs : 0;
+                if (Math.abs(value - current) > 800) {
+                    ListItemData.actions.seek(value);
+                }
+            }
         }
     }
     Label {
