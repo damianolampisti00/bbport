@@ -52,7 +52,7 @@ If you see a banner offering to verify this device, it's because some bridges (e
 
 BBport posts to the BlackBerry Hub for messages in rooms you're not currently viewing, with a pop-up preview banner (the same style system apps like Mail use) rather than just a silent Hub entry. This only starts working *after* the very first login's full sync finishes, on purpose — otherwise logging in for the first time would fire a notification for every message in your entire history at once.
 
-This also works with BBport fully closed, not just backgrounded: a background service wakes up roughly every 15 minutes to check for new messages and post any Hub notifications that are due. It's a periodic check, not instant push, so expect up to about 15 minutes of delay for a message that arrives while the app is closed — open the app for immediate delivery.
+This also works with BBport fully closed, not just backgrounded: a background service wakes up roughly every 6 minutes to check for new messages and post any Hub notifications that are due. It's a periodic check, not instant push, so expect up to about 6 minutes of delay for a message that arrives while the app is closed — open the app for immediate delivery.
 
 ## Logging out
 

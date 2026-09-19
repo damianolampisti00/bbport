@@ -112,7 +112,7 @@ void ApplicationHeadless::onLoginSucceeded()
 void ApplicationHeadless::onLoginFailed(const QString &error)
 {
     // A revoked/expired token, or no network right now -- either way,
-    // nothing more to do until the next scheduled wakeup 15 minutes from
+    // nothing more to do until the next scheduled wakeup 6 minutes from
     // now (or the user re-logs in via the foreground app, which writes a
     // fresh session.json this'll pick up next time).
     bbportLog("[BBportHeadless] login failed: " + error);

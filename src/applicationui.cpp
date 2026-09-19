@@ -198,10 +198,12 @@ ApplicationUI::ApplicationUI() :
     // background sync can happen even with this UI process fully closed.
     // Unconditional regardless of login state -- harmless if there's no
     // session yet, since the headless side has nothing to sync in that case
-    // either. 15 minutes, comfortably above InvokeRecurrenceRule's documented
-    // 6-minute floor (a schedule denser than that is rejected outright).
+    // either. 6 minutes -- InvokeRecurrenceRule's documented floor (a denser
+    // schedule than that is rejected outright), traded for lower notification
+    // latency at some extra battery/radio cost versus the previous 15-minute
+    // interval.
     bb::system::InvokeRecurrenceRule headlessRule(bb::system::InvokeRecurrenceRuleFrequency::Minutely);
-    headlessRule.setInterval(15);
+    headlessRule.setInterval(6);
     bb::system::InvokeTimerRequest headlessTimer("it.bbport.client.headlessSyncTimer", headlessRule, "it.bbport.client.headless");
     bb::system::InvokeReply *timerReply = m_invokeManager->registerTimer(headlessTimer);
     if (timerReply) {

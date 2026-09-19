@@ -17,7 +17,8 @@ class SyncEngine;
 class NotificationManager;
 
 // The real background sync service (see the persistent-login/headless-push
-// plan): woken every ~15 minutes by the recurring timer ApplicationUI
+// plan): woken every 6 minutes (InvokeRecurrenceRule's documented floor) by
+// the recurring timer ApplicationUI
 // registers (bb::system::InvokeManager::registerTimer(), see
 // applicationui.cpp), this does exactly one incremental /sync pass and
 // posts a Hub notification for whatever arrived, then exits -- the

@@ -351,7 +351,7 @@ void SyncEngine::onSyncReplyFinished()
         emit syncError("Sync failed: invalid response from server.");
         if (m_singleShot) {
             // No backoff retry here -- the next scheduled headless wakeup
-            // (15 minutes away, see ApplicationUI's registerTimer() call)
+            // (6 minutes away, see ApplicationUI's registerTimer() call)
             // is this mode's own retry, so nothing further to do now.
             m_running = false;
             emit singleSyncFinished(false);
