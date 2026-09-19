@@ -48,6 +48,16 @@ Long-press any message bubble for:
 
 If you see a banner offering to verify this device, it's because some bridges (e.g. WhatsApp via Beeper) won't deliver messages to an unverified device for security reasons. Tap **Verify device**, then complete the emoji/SAS comparison on whichever other Matrix client you're verifying against (e.g. Beeper Desktop or Element) — confirm the same emoji sequence shows on both sides.
 
+To do this from Element Web specifically:
+
+1. Log into your account on [Element Web](https://app.element.io) in a browser.
+2. Go to **All settings > Sessions**. Find BBport's session in the list — it'll show as unverified.
+3. Click **Verify session** next to it. This sends a verification request to BBport.
+4. On BBport, a popup appears asking to accept the incoming verification request — accept it.
+5. Start the verification from the Element Web side.
+6. Both sides now show an emoji sequence. Compare them, then confirm they match **on BBport first**, then **on Element Web**.
+7. Once both sides confirm, the session is verified.
+
 ## Notifications
 
 BBport posts to the BlackBerry Hub for messages in rooms you're not currently viewing, with a pop-up preview banner (the same style system apps like Mail use) rather than just a silent Hub entry. This only starts working *after* the very first login's full sync finishes, on purpose — otherwise logging in for the first time would fire a notification for every message in your entire history at once.
